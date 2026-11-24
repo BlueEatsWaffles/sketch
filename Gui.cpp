@@ -710,28 +710,48 @@ void tabVisual() {
         ui::sliderInt("Trail length", &c.trailLen, 5, 400);
         ui::subEnd();
     }
-
-    ui::section("Hit borders");
-    if (ui::toggle("Hit borders", &c.hitBorders,
-                   "Colored borders around every hitbox, so you can see what kills you.\n"
-                   "Turning this on also turns on Show hitboxes.") &&
-        c.hitBorders)
-        c.hitboxes = true;
-    if (ui::subBegin("##bordersub", c.hitBorders)) {
-        ui::sliderFloat("Border thickness", &c.borderWidth, 0.1f, 3.f, "%.2f");
-        ui::toggle("Rainbow borders", &c.hbRainbow, "The borders slowly change color.");
+    ui::toggle("Custom hitbox colors", &c.hbCustom, "Pick your own colors and line thickness for the hitboxes.");
+    if (ui::subBegin("##customhb", c.hbCustom)) {
+        ui::sliderFloat("Line thickness##hbw", &c.borderWidth, 0.1f, 3.f, "%.2f");
+        ui::toggle("Rainbow lines##hbr", &c.hbRainbow, "The lines slowly change color.");
         ui::toggle("Fill the boxes", &c.hbFill);
         if (ui::subBegin("##fillsub", c.hbFill)) {
             ui::sliderFloat("Fill see-through", &c.hbFillAlpha, 0.f, 1.f, "%.2f");
             ui::subEnd();
         }
-        if (!c.hbRainbow) {
-            ui::colorEdit("Spikes & saws (kill you)", &c.hbHazard);
-            ui::colorEdit("Blocks (solid)", &c.hbSolid);
-            ui::colorEdit("Orbs, pads, portals", &c.hbSpecial);
-            ui::colorEdit("Everything else", &c.hbOther);
+        ui::colorEdit("Spikes & saws (kill you)##hb1", &c.hbHazard);
+        ui::colorEdit("Blocks (solid)##hb2", &c.hbSolid);
+        ui::colorEdit("Orbs, pads, portals##hb3", &c.hbSpecial);
+        ui::colorEdit("Everything else##hb4", &c.hbOther);
+        ui::colorEdit("Player##hb5", &c.hbPlayer);
+        ui::subEnd();
+    }
+
+    ui::section("Hit borders");
+    if (ui::toggle("Hit borders", &c.hitBorders,
+                   "Your player becomes a small dot, and every spike, saw and block grows by your size.\n"
+                   "The dot crashes exactly when it touches a red border, so tight gaps are easy to see.\n"
+                   "Turning this on hides the normal hitboxes (you can turn them back on).") &&
+        c.hitBorders)
+        c.hitboxes = false;
+    if (ui::subBegin("##bordersub", c.hitBorders)) {
+        ui::toggle("Path line", &c.hbPath, "A line that shows where the dot went.");
+        if (ui::subBegin("##pathsub", c.hbPath)) {
+            ui::sliderInt("Path length", &c.hbPathLen, 60, 4000, "How long the line is (240 = 1 second).");
+            ui::subEnd();
         }
-        ui::colorEdit("Player", &c.hbPlayer);
+        ui::toggle("Show where I clicked", &c.hbClicks, "Little rings on the path where you clicked.");
+        ui::toggle("Blocks too (blue)", &c.hbSolids);
+        ui::toggle("Orbs, pads & portals too (green)", &c.hbSpecials);
+        ui::sliderFloat("Line thickness", &c.borderWidth, 0.1f, 3.f, "%.2f");
+        ui::sliderFloat("Fill strength", &c.hbBorderFill, 0.f, 1.f, "%.2f", "0 = only outlines, 1 = solid colors.");
+        ui::toggle("Rainbow borders", &c.hbRainbow, "The borders slowly change color.");
+        if (!c.hbRainbow) {
+            ui::colorEdit("Spikes & saws", &c.hbHazard);
+            ui::colorEdit("Blocks", &c.hbSolid);
+            ui::colorEdit("Orbs, pads, portals", &c.hbSpecial);
+        }
+        ui::colorEdit("Player dot & path", &c.hbPlayer);
         ui::subEnd();
     }
     ui::keybind("Hit borders on/off key", &c.hitBordersKey);
@@ -854,22 +874,25 @@ void bitrateRows(bool ffmpeg) {
         }
         return;
     }
-    ui::sliderFloat("Bitrate", &c.rBitrate, 1.f, 100.f, "%.1f Mbps",
+    ui::sliderFloat("Bitrate", &c.rBitrate, 1.f, 1000.f, "%.1f Mbps",
                     "How much data each second of video gets. More = sharper video and a bigger file.\n"
-                    "1080p 60 FPS: 8-12 is good, 20-40 is great. YouTube likes 12+.");
+                    "1080p 60 FPS: 8-12 is good, 20-40 is great. YouTube likes 12+.\n"
+                    "4K: 50-100. 8K or 240+ FPS: 200-500. 1000 = almost perfect (giant files).");
     float s = ui::sc();
     float gap = ImGui::GetStyle().ItemSpacing.x;
-    static float const presets[] = {6.f, 12.f, 25.f, 50.f};
-    static char const* const names[] = {"6 Mbps", "12 Mbps", "25 Mbps", "50 Mbps"};
-    float bw = (ImGui::GetContentRegionAvail().x - 8.f * s - gap * 3.f) / 4.f;
-    for (int i = 0; i < 4; i++) {
-        if (i) ImGui::SameLine();
+    static float const presets[] = {6.f, 12.f, 25.f, 50.f, 100.f, 200.f, 350.f, 500.f, 1000.f};
+    static char const* const names[] = {"6 Mbps",   "12 Mbps",  "25 Mbps",  "50 Mbps",  "100 Mbps",
+                                        "200 Mbps", "350 Mbps", "500 Mbps", "1000 Mbps"};
+    float bw = (ImGui::GetContentRegionAvail().x - 8.f * s - gap * 2.f) / 3.f;
+    for (int i = 0; i < 9; i++) {
+        if (i % 3) ImGui::SameLine();
         ImGui::PushID(i + 900);
         if (ui::button(names[i], v2(bw, 0), std::fabs(c.rBitrate - presets[i]) < 0.05f)) c.rBitrate = presets[i];
         ImGui::PopID();
     }
-    char b[96];
-    std::snprintf(b, sizeof(b), "About %.0f MB for each minute of video.", static_cast<double>(c.rBitrate) * 7.5);
+    char b[160];
+    std::snprintf(b, sizeof(b), "About %.0f MB for each minute of video.%s", static_cast<double>(c.rBitrate) * 7.5,
+                  (!ffmpeg && c.rBitrate > 300.f) ? "\nThe built-in renderer stops at 300 Mbps." : "");
     ui::note(b);
 }
 
@@ -890,7 +913,7 @@ void tabRender() {
     } else {
         ui::segmented("##engine", &c.rEngine, engines, 2);
     }
-    ui::note(ffm ? "FFmpeg: best quality, any size up to 4K, and it adds the level's music. "
+    ui::note(ffm ? "FFmpeg: best quality, any size up to 8K, up to 1000 FPS, and it adds the level's music. "
                    "You must install FFmpeg (free). The game looks slow while it renders - that's normal, "
                    "the video comes out perfectly smooth."
                  : "Built-in: uses Windows' own video maker, so there is nothing to install, and it records "
@@ -939,15 +962,35 @@ void tabRender() {
 
     ui::section("Video");
     if (ffm) {
-        static char const* const res[] = {"1280 x 720", "1920 x 1080", "2560 x 1440", "3840 x 2160 (4K)", "Custom"};
-        ui::combo("Size", &c.rResIdx, res, 5);
+        // the list is in size order; the saved number keeps "Custom" at 4 so old settings still work
+        static char const* const res[] = {"1280 x 720 (720p)",  "1920 x 1080 (1080p)", "2560 x 1440 (1440p)",
+                                          "3840 x 2160 (4K)",   "5120 x 2880 (5K)",    "7680 x 4320 (8K)",
+                                          "Custom"};
+        static int const resId[] = {0, 1, 2, 3, 5, 6, 4};
+        int shown = 1;
+        for (int i = 0; i < 7; i++)
+            if (resId[i] == c.rResIdx) shown = i;
+        if (ui::combo("Size", &shown, res, 7, "Bigger = sharper, but slower to make and a bigger file."))
+            c.rResIdx = resId[util::clamp(shown, 0, 6)];
         if (ui::subBegin("##ressub", c.rResIdx == 4)) {
-            ui::sliderInt("Width", &c.rW, 256, 7680);
-            ui::sliderInt("Height", &c.rH, 256, 4320);
+            ui::sliderInt("Width", &c.rW, 256, 8192);
+            ui::sliderInt("Height", &c.rH, 256, 8192);
             ui::subEnd();
         }
-        static char const* const fps[] = {"30 FPS", "60 FPS", "120 FPS", "144 FPS", "240 FPS"};
-        ui::combo("Frame rate", &c.rFpsIdx, fps, 5);
+        if (c.rResIdx == 5 || c.rResIdx == 6 || (c.rResIdx == 4 && (c.rW > 3840 || c.rH > 2160)))
+            ui::note("Huge video! It takes a lot longer to make. Graphics-card H.264 can't go this big, "
+                     "so pick H.265 or a CPU encoder (it switches for you if you forget).");
+        static char const* const fps[] = {"30 FPS",  "60 FPS",  "120 FPS", "144 FPS",
+                                          "240 FPS", "360 FPS", "480 FPS", "Custom"};
+        ui::combo("Frame rate", &c.rFpsIdx, fps, 8);
+        if (ui::subBegin("##fpssub", c.rFpsIdx == 7)) {
+            ui::sliderInt("FPS", &c.rFpsCustom, 10, 1000);
+            ui::subEnd();
+        }
+        int vf = render::fpsFor(c.rFpsIdx);
+        if (vf > 240)
+            ui::note("GD moves 240 times a second, so above 240 FPS some frames are copies of the last one. "
+                     "It works, but it won't look smoother than 240.");
 
         std::vector<std::string> encLabels;
         std::vector<char const*> encPtrs;
@@ -971,8 +1014,9 @@ void tabRender() {
                       static_cast<int>(px.width) & ~1, static_cast<int>(px.height) & ~1);
         ui::note(sz);
         bitrateRows(false);
-        static char const* const bf[] = {"30 FPS", "60 FPS"};
-        ui::combo("Frame rate##bfps", &c.rBFpsIdx, bf, 2);
+        static char const* const bf[] = {"30 FPS", "60 FPS", "120 FPS", "144 FPS", "240 FPS"};
+        ui::combo("Frame rate##bfps", &c.rBFpsIdx, bf, 5,
+                  "120+ FPS needs a newer PC. If the video fails, pick a lower one.");
         ui::toggle("Real-time (no slow-down)", &c.rBRealtime,
                    "ON: records while you play at normal speed (fastest).\n"
                    "OFF: slows the game down so no frame is missed (smoother).");
@@ -980,10 +1024,24 @@ void tabRender() {
 
     ui::section("Sound & timing");
     if (ffm) {
-        ui::toggle("Add the level's music", &c.rMusic);
+        ui::toggle("Add sound", &c.rMusic);
         if (ui::subBegin("##musicsub", c.rMusic)) {
-            ui::sliderFloat("Music start (seconds)", &c.rMusicOffset, -5.f, 60.f, "%.2f s",
-                            "Skip into the song. Negative = song starts later.");
+            static char const* const modes[] = {"Song file", "Record the game"};
+            ui::segmented("##audiomode", &c.rAudioMode, modes, 2);
+            if (c.rAudioMode == 0) {
+                ui::note("Adds the level's song file. NONG songs (from the Jukebox mod) work too. Fast.");
+                ui::sliderFloat("Music start (seconds)", &c.rMusicOffset, -5.f, 60.f, "%.2f s",
+                                "Skip into the song. Negative = song starts later.");
+            } else {
+                ui::note("After the video is made, the macro plays the level once more at normal speed while "
+                         "sketch records everything you'd hear: music, NONG songs, sound effects and clicks. "
+                         "Then it puts that sound into the video.\n"
+                         "Needs a macro playing (Bot tab). Don't touch anything while it records, and keep "
+                         "your game volume up.");
+                ui::sliderFloat("Sound timing", &c.rRecDelay, -0.5f, 0.5f, "%.2f s",
+                                "If the sound is a little early or late in the video, nudge it here.\n"
+                                "Bigger = sound comes earlier.");
+            }
             ui::subEnd();
         }
     } else {
@@ -997,7 +1055,13 @@ void tabRender() {
     ui::spacing(4);
     bool on = render::active();
     float bh = ui::rowH() * 1.4f;
-    if (!on) {
+    if (render::audioPassActive()) {
+        char pb[128];
+        std::snprintf(pb, sizeof(pb), "Recording the sound... %.0f s. The level is playing once more - don't touch anything!",
+                      render::audioPassSeconds());
+        ui::note(pb);
+        if (ui::button("Stop recording sound (use the song file)##rpass", v2(-1.f, bh))) render::cancelAudioPass();
+    } else if (!on) {
         char const* lbl = ffm ? "Start video (FFmpeg)##rstart" : "Start video (built-in)##rstart";
         if (ui::button(lbl, v2(-1.f, bh), true)) render::start(hacks::playLayer(), c.rRestart);
     } else {

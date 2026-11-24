@@ -9,8 +9,11 @@ A hand-drawn, notebook-style mod menu. Press **Tab** to open it (change the key 
 - **Bot**: macro bot and replay bot (with frame fixes), macro library, frame stepper
 - **Plays other bots' macros**: Eclipse, Mega Hack, xdBot, zBot, Prism, yBot 2, ToastyReplay
 - **Video Maker**: FFmpeg renderer (best quality + music) or Built-in renderer (fast, nothing to install),
-  with a quality setting or an exact bitrate
-- **Hitboxes & hit borders** (own checkbox): colors, rainbow, thickness, fill, trail, death and click markers
+  up to 8K, up to 480 FPS (custom up to 1000), a quality setting or an exact bitrate up to 1000 Mbps,
+  NONG songs, and an option to record the game's real sound
+- **Hit borders**: your player becomes a dot and obstacles grow by its size (touching borders join into one
+  clean shape), with a path line and click rings
+- **Hitboxes**: custom colors, rainbow, thickness, fill, trail, death and click markers
 - **Speedhack**, slow motion key, FPS unlock, lock delta
 - **Noclip**, safe mode, respawn options, jump hack, auto clicker and more
 - **Labels**: FPS, CPS, FPS graph, input display, noclip accuracy, deaths, clock, cheat indicator...

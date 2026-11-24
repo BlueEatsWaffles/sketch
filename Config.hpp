@@ -128,8 +128,15 @@ struct MenuConfig {
     bool hitboxOnDeath = false;
     bool hitboxTrail = false;
     int trailLen = 60;
-    bool hitBorders = false;
+    bool hitBorders = false;     // player = dot, obstacles grow by the player's size
     int hitBordersKey = -1;
+    bool hbPath = true;          // hit borders: line where the dot went
+    int hbPathLen = 720;         // how long that line is (ticks)
+    bool hbClicks = true;        // hit borders: rings where you clicked
+    bool hbSolids = true;        // hit borders: blocks too (blue)
+    bool hbSpecials = true;      // hit borders: orbs, pads, portals too (green)
+    float hbBorderFill = 0.35f;  // hit borders: how see-through the filled shapes are
+    bool hbCustom = false;       // custom colors for the normal hitboxes
     bool hbRainbow = false;
     bool hbOnlyPlayer = false;
     float borderWidth = 0.6f;
@@ -203,14 +210,15 @@ struct MenuConfig {
     // ---- render (video maker) --------------------------------------------
     int rEngine = 0;          // 0 = FFmpeg (best, needs install), 1 = built-in (fast, worse)
     int rBQuality = 1;        // built-in: 0 low, 1 medium, 2 high
-    int rBFpsIdx = 1;         // built-in: 0 = 30 FPS, 1 = 60 FPS
+    int rBFpsIdx = 1;         // built-in: 0..4 = 30/60/120/144/240 FPS
     bool rBRealtime = true;   // built-in: record while the game runs at normal speed
     char ffmpegPath[512] = "";
     char renderDir[512] = "";
-    int rResIdx = 1;
+    int rResIdx = 1;          // 0..3 = 720p/1080p/1440p/4K, 4 = custom, 5 = 5K, 6 = 8K
     int rW = 1920;
     int rH = 1080;
-    int rFpsIdx = 1;
+    int rFpsIdx = 1;          // 0..6 = 30/60/120/144/240/360/480 FPS, 7 = custom
+    int rFpsCustom = 90;      // FPS when rFpsIdx = 7
     int rEncIdx = 0;
     int rQuality = 18;
     int rRateMode = 0;          // 0 = quality number, 1 = bitrate
@@ -219,6 +227,8 @@ struct MenuConfig {
     char rExtra[256] = "";
     bool rMusic = true;
     float rMusicOffset = 0.f;
+    int rAudioMode = 0;       // 0 = the song file, 1 = record the game's sound (plays the macro again)
+    float rRecDelay = 0.f;    // "Record the game": nudge the sound earlier/later (seconds)
     float rEndPad = 3.f;
     bool rRestart = true;
     bool rAutoWithBot = false;

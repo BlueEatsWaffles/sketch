@@ -143,6 +143,7 @@ void setSlowHeld(bool held) { g_slowHeld = held; }
 float speedFactor(bool inLevel) {
     auto const& c = cfg();
     if (predictor::active()) return 1.f;  // Predict never uses speedhack
+    if (render::audioPassActive()) return 1.f;  // recording the game's sound: real speed only
     float f = 1.f;
     if (c.speedhack && (!c.speedOnlyInLevel || inLevel)) f *= util::clamp(c.speed, 0.01f, 100.f);
     if (c.slowmo && g_slowHeld && inLevel) f *= util::clamp(c.slowmoSpeed, 0.05f, 1.f);
@@ -233,7 +234,7 @@ void engineTick(float realDt) {
         if (fg) GetWindowThreadProcessId(fg, &pid);
         g_focused = fg && pid == GetCurrentProcessId();
     }
-    bool mute = predictor::active() || (c.muteUnfocused && !g_focused);
+    bool mute = !render::audioPassActive() && (predictor::active() || (c.muteUnfocused && !g_focused));
     if (mute != g_muted) {
         auto fe = FMODAudioEngine::sharedEngine();
         if (fe && fe->m_globalChannel) {

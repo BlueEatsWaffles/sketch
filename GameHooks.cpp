@@ -61,6 +61,7 @@ class $modify(SKPlayLayer, PlayLayer) {
             visuals::addDeathMarker(this, player);
             stats::onDeath(this);
             hacks::onDeath(this);
+            render::onDeath();
         }
     }
 
@@ -159,6 +160,7 @@ class $modify(SKGameLayer, GJBaseGameLayer) {
         if (inLevel) {
             bot::afterTick(this);
             stats::afterTick(this);
+            visuals::afterTick(this);
         }
     }
 

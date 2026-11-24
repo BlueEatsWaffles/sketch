@@ -54,7 +54,7 @@ void visitAll(MenuConfig& c, V& v) {
     F(customRespawn); F(respawnDelay); F(jumpHack); F(autoclicker); F(acHold); F(acRelease); F(acP2);
     F(noDeathEffect); F(noSpawnEffect); F(hidePlayer); F(noUnfocusPause); F(noNewBest);
     // visual
-    F(hitboxes); F(hitboxOnDeath); F(hitboxTrail); F(trailLen); F(hitBorders); F(hitBordersKey); F(hbRainbow); F(hbOnlyPlayer); F(borderWidth); F(hbFill);
+    F(hitboxes); F(hitboxOnDeath); F(hitboxTrail); F(trailLen); F(hitBorders); F(hitBordersKey); F(hbPath); F(hbPathLen); F(hbClicks); F(hbSolids); F(hbSpecials); F(hbBorderFill); F(hbCustom); F(hbRainbow); F(hbOnlyPlayer); F(borderWidth); F(hbFill);
     F(hbFillAlpha); F(hbHazard); F(hbSolid); F(hbSpecial); F(hbOther); F(hbPlayer); F(playerBox);
     F(rainbow); F(rainbowSpeed); F(rainbowTrail); F(noWaveTrail); F(solidWave); F(noTrail);
     F(hideAttempts); F(hidePercent); F(hideProgress); F(accuratePercent); F(percentDecimals);
@@ -71,8 +71,8 @@ void visitAll(MenuConfig& c, V& v) {
     F(noTransition); F(unlockAll); F(restartKey); F(practiceKey); F(screenshotKey); F(muteUnfocused);
     // render
     F(rEngine); F(rBQuality); F(rBFpsIdx); F(rBRealtime);
-    F(ffmpegPath); F(renderDir); F(rResIdx); F(rW); F(rH); F(rFpsIdx); F(rEncIdx); F(rQuality); F(rRateMode); F(rBitrate);
-    F(rPresetIdx); F(rExtra); F(rMusic); F(rMusicOffset); F(rEndPad); F(rRestart); F(rAutoWithBot); F(rCloseMenu);
+    F(ffmpegPath); F(renderDir); F(rResIdx); F(rW); F(rH); F(rFpsIdx); F(rFpsCustom); F(rEncIdx); F(rQuality); F(rRateMode); F(rBitrate);
+    F(rPresetIdx); F(rExtra); F(rMusic); F(rMusicOffset); F(rAudioMode); F(rRecDelay); F(rEndPad); F(rRestart); F(rAutoWithBot); F(rCloseMenu);
 #undef F
     visitTheme("custom.", c.custom, v);
 }
@@ -175,11 +175,16 @@ void sanitize(MenuConfig& c) {
     c.lblAlpha = clamp(c.lblAlpha, 0.1f, 1.f);
     c.acHold = clamp(c.acHold, 1, 240);
     c.acRelease = clamp(c.acRelease, 1, 240);
-    c.rW = clamp(c.rW, 128, 7680);
-    c.rH = clamp(c.rH, 128, 4320);
+    c.rW = clamp(c.rW, 128, 8192);
+    c.rH = clamp(c.rH, 128, 8192);
+    c.rFpsCustom = clamp(c.rFpsCustom, 10, 1000);
     c.rQuality = clamp(c.rQuality, 0, 51);
     c.rRateMode = clamp(c.rRateMode, 0, 1);
-    c.rBitrate = clamp(c.rBitrate, 0.5f, 150.f);
+    c.rAudioMode = clamp(c.rAudioMode, 0, 1);
+    c.rRecDelay = clamp(c.rRecDelay, -1.f, 1.f);
+    c.hbPathLen = clamp(c.hbPathLen, 30, 4000);
+    c.hbBorderFill = clamp(c.hbBorderFill, 0.f, 1.f);
+    c.rBitrate = clamp(c.rBitrate, 0.5f, 1000.f);
     c.respawnDelay = clamp(c.respawnDelay, 0.f, 5.f);
     c.rEngine = clamp(c.rEngine, 0, 1);
     c.importOffset = clamp(c.importOffset, -20, 20);
@@ -193,9 +198,9 @@ void sanitize(MenuConfig& c) {
     c.inputScale = clamp(c.inputScale, 0.5f, 2.5f);
     c.custom.patternKind = clamp(c.custom.patternKind, 0, static_cast<int>(PatCount) - 1);
     c.rBQuality = clamp(c.rBQuality, 0, 2);
-    c.rBFpsIdx = clamp(c.rBFpsIdx, 0, 1);
-    c.rResIdx = clamp(c.rResIdx, 0, 4);
-    c.rFpsIdx = clamp(c.rFpsIdx, 0, 4);
+    c.rBFpsIdx = clamp(c.rBFpsIdx, 0, 4);
+    c.rResIdx = clamp(c.rResIdx, 0, 6);
+    c.rFpsIdx = clamp(c.rFpsIdx, 0, 7);
     c.rEncIdx = clamp(c.rEncIdx, 0, 5);
     c.rPresetIdx = clamp(c.rPresetIdx, 0, 6);
 }

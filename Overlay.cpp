@@ -267,9 +267,25 @@ void drawPredict(ImDrawList* dl, ImVec2 o, ImVec2 sz) {
 }
 
 void drawRenderBadge(ImDrawList* dl, ImVec2 o, ImVec2 sz) {
-    if (!render::active()) return;
+    if (!render::active() && !render::audioPassActive()) return;
     auto const& t = theme::live();
     char b[128];
+    if (render::audioPassActive()) {
+        double ps = render::audioPassSeconds();
+        int pm = static_cast<int>(ps / 60.0);
+        std::snprintf(b, sizeof(b), "REC SOUND  %d:%04.1f   don't touch anything", pm, ps - pm * 60.0);
+        float size0 = 17.f;
+        ImVec2 ts0 = ui::textSize(b, nullptr, size0);
+        float w0 = ts0.x + 44.f, h0 = size0 + 16.f;
+        ImVec2 a0(o.x + (sz.x - w0) * 0.5f, o.y + 12.f), z0(a0.x + w0, a0.y + h0);
+        dl->AddRectFilled(ImVec2(a0.x + 3, a0.y + 4), ImVec2(z0.x + 3, z0.y + 4), theme::col(t.outline, 0.5f), h0 * 0.5f);
+        dl->AddRectFilled(a0, z0, theme::col(t.panel), h0 * 0.5f);
+        dl->AddRect(a0, z0, theme::col(t.outline), h0 * 0.5f, 0, 2.5f);
+        float blink0 = 0.5f + 0.5f * std::sin(static_cast<float>(ImGui::GetTime()) * 6.f);
+        dl->AddCircleFilled(ImVec2(a0.x + 18.f, (a0.y + z0.y) * 0.5f), 6.f, IM_COL32(80, 200, 255, static_cast<int>(120 + 135 * blink0)));
+        ui::text(dl, ImVec2(a0.x + 32.f, a0.y + 8.f), theme::col(t.text), b, nullptr, size0);
+        return;
+    }
     double vs = render::videoSeconds();
     int m = static_cast<int>(vs / 60.0);
     std::snprintf(b, sizeof(b), "REC  %d:%05.2f   %d frames", m, vs - m * 60.0, render::frames());

@@ -35,13 +35,16 @@ class $modify(SKScheduler, CCScheduler) {
             // exactly one video frame, so the video is perfectly smooth.
             dt = 1.f / static_cast<float>(render::fps());
         } else {
-            if (c.lockDelta && inLevel) dt = static_cast<float>(CCDirector::sharedDirector()->getAnimationInterval());
+            // (not while recording the game's sound: that has to run in real time)
+            if (c.lockDelta && inLevel && !render::audioPassActive())
+                dt = static_cast<float>(CCDirector::sharedDirector()->getAnimationInterval());
             dt *= hacks::speedFactor(inLevel);
         }
 
         hacks::engineTick(realDt);
         CCScheduler::update(dt);
         if (render::active()) render::capture(realDt);
+        render::tick(realDt);
     }
 };
 
@@ -148,12 +151,12 @@ class $modify(SKFade, CCTransitionFade) {
 };
 
 // ---------------------------------------------------------------------------
-//  Hit borders: recolor the game's hitbox drawing
+//  Custom hitbox colors: recolor the game's hitbox drawing
 // ---------------------------------------------------------------------------
 class $modify(SKDrawNode, CCDrawNode) {
     bool drawPolygon(CCPoint* verts, unsigned int count, ccColor4F const& fill, float width,
                      ccColor4F const& border, BorderAlignment alignment) {
-        if (cfg().hitBorders && visuals::isDebugNode(this)) {
+        if (cfg().hbCustom && visuals::isDebugNode(this)) {
             auto const& c = cfg();
             ccColor4F col = visuals::recolor(border);
             ccColor4F f = col;
@@ -165,7 +168,7 @@ class $modify(SKDrawNode, CCDrawNode) {
 
     bool drawCircle(CCPoint const& pos, float radius, ccColor4F const& fill, float width, ccColor4F const& border,
                     unsigned int segments) {
-        if (cfg().hitBorders && visuals::isDebugNode(this)) {
+        if (cfg().hbCustom && visuals::isDebugNode(this)) {
             auto const& c = cfg();
             ccColor4F col = visuals::recolor(border);
             ccColor4F f = col;

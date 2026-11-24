@@ -1,4 +1,6 @@
 #include "Render.hpp"
+#include "AudioCap.hpp"
+#include "Bot.hpp"
 #include "Builtin.hpp"
 #include "Config.hpp"
 #include "Gui.hpp"
@@ -8,6 +10,7 @@
 #include "Predict.hpp"
 #include "Util.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <fstream>
@@ -49,6 +52,7 @@ struct Session {
     void* hIn = nullptr;     // FFmpeg only: pipe we write frames into
     PROCESS_INFORMATION pi{};
     CCRenderTexture* rt = nullptr;
+    bool sharp = false;      // FFmpeg: the picture is drawn bigger than the window (1440p, 4K, 8K...)
     int cw = 0, ch = 0;
     std::vector<uint8_t> buf;
     int frames = 0;
@@ -57,8 +61,22 @@ struct Session {
     float endCountdown = -1.f;
     std::string ffmpeg, tmpPath, finalPath, song;
     float songOffset = 0.f;
+    bool recordAudio = false;  // play the macro again afterwards and record the real sound
 };
 Session g;
+
+// The second pass that records the game's sound.
+struct Pass {
+    bool active = false;
+    bool levelDone = false;
+    float endCountdown = -1.f;
+    double started = 0.0;
+    double videoSeconds = 0.0;
+    PROCESS_INFORMATION pi{};  // FFmpeg still finishing the video
+    std::string ff, tmp, fin, wav, song;
+    float songOffset = 0.f;
+};
+Pass g_pass;
 
 std::wstring widen(std::string const& s) {
     if (s.empty()) return {};
@@ -124,15 +142,17 @@ bool runProcess(std::string const& cmdUtf8, std::string* output, DWORD* exitCode
 }
 
 int fpsFromIdx(int i) {
-    static int const v[] = {30, 60, 120, 144, 240};
-    return v[util::clamp(i, 0, 4)];
+    static int const v[] = {30, 60, 120, 144, 240, 360, 480};
+    if (i == 7) return util::clamp(cfg().rFpsCustom, 10, 1000);
+    return v[util::clamp(i, 0, 6)];
 }
 
 void resolution(int& w, int& h) {
     auto const& c = cfg();
-    static int const pw[] = {1280, 1920, 2560, 3840};
-    static int const ph[] = {720, 1080, 1440, 2160};
-    if (c.rResIdx >= 0 && c.rResIdx < 4) {
+    // 4 is "custom" (it was the last one before 5K and 8K were added)
+    static int const pw[] = {1280, 1920, 2560, 3840, 0, 5120, 7680};
+    static int const ph[] = {720, 1080, 1440, 2160, 0, 2880, 4320};
+    if (c.rResIdx >= 0 && c.rResIdx <= 6 && c.rResIdx != 4) {
         w = pw[c.rResIdx];
         h = ph[c.rResIdx];
     } else {
@@ -145,7 +165,7 @@ void resolution(int& w, int& h) {
 
 // Built-in renderer bitrate: Low / Medium / High, adjusted for size and FPS.
 unsigned builtinBitrate(int w, int h, int fps) {
-    if (cfg().rRateMode == 1) return static_cast<unsigned>(util::clamp(cfg().rBitrate, 0.5f, 150.f) * 1000000.0);
+    if (cfg().rRateMode == 1) return static_cast<unsigned>(util::clamp(cfg().rBitrate, 0.5f, 300.f) * 1000000.0);
     static double const mbps[] = {5.0, 10.0, 20.0};
     double base = mbps[util::clamp(cfg().rBQuality, 0, 2)];
     double scale = (static_cast<double>(w) * static_cast<double>(h)) / (1920.0 * 1080.0) * (static_cast<double>(fps) / 60.0);
@@ -159,7 +179,7 @@ std::string qualityArgs(int enc) {
     std::string qv = std::to_string(util::clamp(c.rQuality, 0, 51));
     if (c.rRateMode == 1) {
         // a fixed bitrate (size of the video per second) instead of a quality number
-        int kb = static_cast<int>(util::clamp(c.rBitrate, 0.5f, 150.f) * 1000.f);
+        int kb = static_cast<int>(util::clamp(c.rBitrate, 0.5f, 1000.f) * 1000.f);
         std::string rate = "-b:v " + std::to_string(kb) + "k -maxrate " + std::to_string(kb * 3 / 2) + "k -bufsize " +
                            std::to_string(kb * 2) + "k";
         switch (enc) {
@@ -286,6 +306,12 @@ void runCheck() {
 
 std::string songPath(PlayLayer* pl) {
     if (!pl || !pl->m_level) return {};
+    // Custom songs: ask the song manager. NONG mods like Jukebox answer with
+    // the replacement song here (and for main levels, in getAudioFileName).
+    if (pl->m_level->m_songID > 0) {
+        std::string nong = MusicDownloadManager::sharedState()->pathForSong(pl->m_level->m_songID);
+        if (!nong.empty() && isFile(util::u8path(nong))) return util::pathStr(util::u8path(nong));
+    }
     std::string name = pl->m_level->getAudioFileName().c_str();
     if (name.empty()) return {};
     auto p = util::u8path(name);
@@ -319,12 +345,58 @@ void openUrl(std::string const& url) {
 bool active() { return g.active; }
 int engine() { return g.engine; }
 int fps() { return g.fps > 0 ? g.fps : 60; }
+int fpsFor(int idx) { return fpsFromIdx(idx); }
 bool locksTime() { return g.active && !(g.engine == Builtin && g.realtime); }
 int frames() { return g.frames; }
 float videoSeconds() { return g.fps > 0 ? static_cast<float>(g.frames) / static_cast<float>(g.fps) : 0.f; }
 double elapsed() { return g.active ? util::now() - g.startTime : 0.0; }
 
 namespace {
+
+// Draws the game into the big picture. The game thinks the "screen" is the
+// size of the picture for a moment (the same trick other bots use), so
+// everything, even shader effects and clipping, lines up.
+void drawBig(CCScene* scene) {
+    auto* director = CCDirector::sharedDirector();
+    auto* view = director->getOpenGLView();
+    if (!view || !g.rt) return;
+    auto pts = director->getWinSize();
+    if (pts.width <= 0.f || pts.height <= 0.f) return;
+
+    float oldSX = view->m_fScaleX, oldSY = view->m_fScaleY;
+    CCRect oldVP = view->m_obViewPortRect;
+    GLint oldFbo = 0;
+    GLfloat oldClear[4] = {0.f, 0.f, 0.f, 0.f};
+    glGetIntegerv(GL_FRAMEBUFFER_BINDING, &oldFbo);
+    glGetFloatv(GL_COLOR_CLEAR_VALUE, oldClear);
+
+    view->m_fScaleX = static_cast<float>(g.cw) / pts.width;
+    view->m_fScaleY = static_cast<float>(g.ch) / pts.height;
+    view->m_obViewPortRect = CCRect(0.f, 0.f, static_cast<float>(g.cw), static_cast<float>(g.ch));
+
+    kmGLMatrixMode(KM_GL_PROJECTION);
+    kmGLPushMatrix();
+    kmGLMatrixMode(KM_GL_MODELVIEW);
+    kmGLPushMatrix();
+    glBindFramebuffer(GL_FRAMEBUFFER, g.rt->m_uFBO);
+    director->setProjection(director->getProjection());  // camera + viewport for the big picture
+    glClearColor(0.f, 0.f, 0.f, 1.f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    scene->visit();
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, g.cw, g.ch, GL_RGB, GL_UNSIGNED_BYTE, g.buf.data());
+    glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(oldFbo));
+
+    view->m_fScaleX = oldSX;
+    view->m_fScaleY = oldSY;
+    view->m_obViewPortRect = oldVP;
+    kmGLMatrixMode(KM_GL_PROJECTION);
+    kmGLPopMatrix();
+    kmGLMatrixMode(KM_GL_MODELVIEW);
+    kmGLPopMatrix();
+    director->setViewport();
+    glClearColor(oldClear[0], oldClear[1], oldClear[2], oldClear[3]);
+}
 
 void dropTexture() {
     if (g.rt) {
@@ -349,6 +421,15 @@ bool startFfmpeg(std::string const& ff, std::filesystem::path const& dir) {
     g.buf.assign(static_cast<size_t>(g.cw) * static_cast<size_t>(g.ch) * 3u, 0);
     int W = 1920, H = 1080;
     resolution(W, H);
+    // Graphics-card H.264 encoders stop at about 4096 x 2304. Bigger videos
+    // (5K, 8K) need H.265 on the GPU or the CPU encoder.
+    if ((enc == 1 || enc == 2 || enc == 3) && (W > 4096 || H > 2304)) {
+        auto r = report();
+        int to = (enc == 1 && (!r.checked || r.enc[5])) ? 5 : 0;
+        overlay::toast(std::string("This size is too big for ") + kEncLabels[enc] + ", using " + kEncLabels[to] + " instead.",
+                       overlay::Warn);
+        enc = to;
+    }
     std::string extra = c.rExtra;
     std::string cmd = q(ff) + " -y -hide_banner -loglevel warning -f rawvideo -pix_fmt rgb24 -s " +
                       std::to_string(g.cw) + "x" + std::to_string(g.ch) + " -r " + std::to_string(g.fps) +
@@ -413,8 +494,109 @@ bool startBuiltin() {
 
 }  // namespace
 
+namespace {
+
+// Waits for FFmpeg to finish the video, then adds the sound (a song or a
+// recording) in the background.
+void muxLater(PROCESS_INFORMATION pi, std::string ff, std::string tmp, std::string fin, std::string audio, float off,
+              bool deleteAudio, bool keep, int frameCount) {
+    std::thread([=] {
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        DWORD code = 1;
+        GetExitCodeProcess(pi.hProcess, &code);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+
+        std::error_code ec;
+        auto tmpP = util::u8path(tmp);
+        auto finP = util::u8path(fin);
+        auto cleanup = [&] {
+            if (deleteAudio && !audio.empty()) std::filesystem::remove(util::u8path(audio), ec);
+        };
+        if (!keep || frameCount == 0) {
+            std::filesystem::remove(tmpP, ec);
+            cleanup();
+            overlay::toast("Render cancelled.", overlay::Info);
+            return;
+        }
+        if (code != 0 || !isFile(tmpP)) {
+            cleanup();
+            overlay::toast("FFmpeg failed. Open ffmpeg-log.txt in the output folder to see why.", overlay::Bad);
+            return;
+        }
+        if (!audio.empty() && isFile(util::u8path(audio))) {
+            char offs[32];
+            std::snprintf(offs, sizeof(offs), "%.3f", off >= 0.f ? off : -off);
+            std::string audioIn = (off >= 0.f ? std::string(" -ss ") : std::string(" -itsoffset ")) + offs + " -i " + q(audio);
+            // apad + shortest: the sound never cuts the video short
+            std::string cmd = q(ff) + " -y -hide_banner -nostdin -loglevel error -i " + q(tmp) + audioIn +
+                              " -map 0:v -map 1:a -c:v copy -c:a aac -b:a 192k -af apad -shortest " + q(fin);
+            DWORD c2 = 1;
+            if (runProcess(cmd, nullptr, &c2, INFINITE) && c2 == 0) {
+                std::filesystem::remove(tmpP, ec);
+                cleanup();
+                overlay::toast("Video saved: " + util::pathStr(finP.filename()), overlay::Good);
+                return;
+            }
+            overlay::toast("Couldn't add the sound, saved the video without it.", overlay::Warn);
+        }
+        cleanup();
+        std::filesystem::rename(tmpP, finP, ec);
+        overlay::toast("Video saved: " + util::pathStr(finP.filename()), overlay::Good);
+    }).detach();
+}
+
+// Starts the sound pass: the same macro plays again at normal speed.
+bool beginPass(int frameCount) {
+    auto pl = hacks::playLayer();
+    if (!pl || bot::macro().inputs.empty()) return false;
+    g_pass = Pass{};
+    g_pass.pi = g.pi;
+    g_pass.ff = g.ffmpeg;
+    g_pass.tmp = g.tmpPath;
+    g_pass.fin = g.finalPath;
+    g_pass.song = g.song;
+    g_pass.songOffset = g.songOffset;
+    g_pass.videoSeconds = static_cast<double>(frameCount) / static_cast<double>(util::maxv(1, g.fps));
+    std::string base = g.tmpPath;
+    auto dot = base.rfind(".video.mp4");
+    g_pass.wav = (dot != std::string::npos ? base.substr(0, dot) : base) + ".sound.wav";
+    g_pass.active = true;
+    bot::startPlay();  // restarts the level and plays the macro again
+    if (!audiocap::start()) {
+        g_pass.active = false;
+        overlay::toast("Couldn't record the game's sound. Using the song file instead.", overlay::Warn);
+        return false;
+    }
+    g_pass.started = util::now();
+    overlay::toast("Video done! Now recording the sound: the level plays once more at normal speed. Don't touch anything!",
+                   overlay::Info);
+    return true;
+}
+
+// Done (or stopped): put the recording (or the song, if it went wrong) in the video.
+void endPass(bool ok, std::string const& why) {
+    if (!g_pass.active) return;
+    g_pass.active = false;
+    int rate = 44100;
+    std::vector<int16_t> samples = audiocap::take(rate);
+    audiocap::stop();
+    if (ok && !samples.empty() && audiocap::writeWav(g_pass.wav, samples, rate)) {
+        // the sound is mixed a little after the game asks for it: nudge it back
+        float off = static_cast<float>(audiocap::latency() * 0.5) + cfg().rRecDelay;
+        muxLater(g_pass.pi, g_pass.ff, g_pass.tmp, g_pass.fin, g_pass.wav, off, true, true, 1);
+        overlay::toast("Sound recorded! Putting it into the video...", overlay::Good);
+        return;
+    }
+    if (!why.empty()) overlay::toast(why, overlay::Warn);
+    muxLater(g_pass.pi, g_pass.ff, g_pass.tmp, g_pass.fin, g_pass.song, g_pass.songOffset, false, true, 1);
+}
+
+}  // namespace
+
 bool start(PlayLayer* pl, bool restartLevel) {
     if (g.active) return true;
+    if (g_pass.active) return false;  // still recording the sound of the last video
     if (predictor::active()) {
         overlay::toast("Wait for Predict to finish first.", overlay::Warn);
         return false;
@@ -451,13 +633,52 @@ bool start(PlayLayer* pl, bool restartLevel) {
     g.finalPath = util::pathStr(dir / util::u8path(base + ".mp4"));
     g.song = (eng == FFmpeg && c.rMusic) ? songPath(pl) : std::string();
     g.songOffset = c.rMusicOffset;
-    g.fps = (eng == Builtin) ? (c.rBFpsIdx == 0 ? 30 : 60) : fpsFromIdx(c.rFpsIdx);
+    g.recordAudio = false;
+    if (eng == FFmpeg && c.rMusic && c.rAudioMode == 1) {
+        if (bot::state() == bot::State::Play) g.recordAudio = true;
+        else overlay::toast("\"Record the game\" needs a macro playing (Bot tab). Using the song file instead.", overlay::Warn);
+    }
+    static int const builtinFps[] = {30, 60, 120, 144, 240};
+    g.fps = (eng == Builtin) ? builtinFps[util::clamp(c.rBFpsIdx, 0, 4)] : fpsFromIdx(c.rFpsIdx);
     g.ffmpeg = ff;
-    if (eng == FFmpeg && c.rMusic && g.song.empty())
+    if (eng == FFmpeg && c.rMusic && !g.recordAudio && g.song.empty())
         overlay::toast("Couldn't find the level's song - the video will have no music.", overlay::Warn);
 
-    auto winSize = CCDirector::sharedDirector()->getWinSize();
-    g.rt = CCRenderTexture::create(static_cast<int>(winSize.width), static_cast<int>(winSize.height));
+    auto* director = CCDirector::sharedDirector();
+    auto winSize = director->getWinSize();
+    int mkW = static_cast<int>(winSize.width), mkH = static_cast<int>(winSize.height);
+    g.sharp = false;
+    if (eng == FFmpeg) {
+        // Draw the game at least as big as the video, so 1440p / 4K / 8K are
+        // really sharp (not a small picture stretched up). Same shape as the window.
+        int W = 1920, H = 1080;
+        resolution(W, H);
+        float csf = director->getContentScaleFactor();
+        if (csf <= 0.f) csf = 1.f;
+        double baseW = static_cast<double>(winSize.width) * csf, baseH = static_cast<double>(winSize.height) * csf;
+        double s = util::maxv(1.0, util::maxv(W / baseW, H / baseH));
+        GLint maxTex = 0;
+        GLint maxView[2] = {0, 0};
+        glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTex);
+        glGetIntegerv(GL_MAX_VIEWPORT_DIMS, maxView);
+        double limW = maxTex > 0 ? maxTex : 8192.0, limH = limW;
+        if (maxView[0] > 0) limW = util::minv(limW, static_cast<double>(maxView[0]));
+        if (maxView[1] > 0) limH = util::minv(limH, static_cast<double>(maxView[1]));
+        double fit = util::minv(limW / (baseW * s), limH / (baseH * s));
+        if (fit < 1.0) {
+            s *= fit * 0.995;
+            char msg[160];
+            std::snprintf(msg, sizeof(msg), "Your graphics card can draw up to %d x %d, so this video will be a little softer.",
+                          static_cast<int>(baseW * s), static_cast<int>(baseH * s));
+            overlay::toast(msg, overlay::Warn);
+        }
+        if (s > 1.001) {
+            mkW = static_cast<int>(std::ceil(winSize.width * s));
+            mkH = static_cast<int>(std::ceil(winSize.height * s));
+            g.sharp = true;
+        }
+    }
+    g.rt = CCRenderTexture::create(mkW, mkH);
     if (!g.rt) {
         overlay::toast("Could not create the render texture.", overlay::Bad);
         return false;
@@ -509,11 +730,15 @@ void capture(float realDt) {
         auto scene = CCDirector::sharedDirector()->getRunningScene();
         if (!scene) return;
         bool builtinFmt = (g.engine == Builtin);
-        g.rt->beginWithClear(0.f, 0.f, 0.f, 1.f);
-        scene->visit();
-        glPixelStorei(GL_PACK_ALIGNMENT, 1);
-        glReadPixels(0, 0, g.cw, g.ch, builtinFmt ? GL_BGRA : GL_RGB, GL_UNSIGNED_BYTE, g.buf.data());
-        g.rt->end();
+        if (g.sharp) {
+            drawBig(scene);
+        } else {
+            g.rt->beginWithClear(0.f, 0.f, 0.f, 1.f);
+            scene->visit();
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glReadPixels(0, 0, g.cw, g.ch, builtinFmt ? GL_BGRA : GL_RGB, GL_UNSIGNED_BYTE, g.buf.data());
+            g.rt->end();
+        }
 
         if (builtinFmt) {
             std::string err;
@@ -568,46 +793,9 @@ void stop(bool keep) {
     if (in) CloseHandle(in);  // tells FFmpeg "no more frames"
 
     PROCESS_INFORMATION pi = g.pi;
-    std::string ff = g.ffmpeg, tmp = g.tmpPath, fin = g.finalPath, song = g.song;
-    float off = g.songOffset;
     int frameCount = g.frames;
-
-    std::thread([=] {
-        WaitForSingleObject(pi.hProcess, INFINITE);
-        DWORD code = 1;
-        GetExitCodeProcess(pi.hProcess, &code);
-        CloseHandle(pi.hProcess);
-        CloseHandle(pi.hThread);
-
-        std::error_code ec;
-        auto tmpP = util::u8path(tmp);
-        auto finP = util::u8path(fin);
-        if (!keep || frameCount == 0) {
-            std::filesystem::remove(tmpP, ec);
-            overlay::toast("Render cancelled.", overlay::Info);
-            return;
-        }
-        if (code != 0 || !isFile(tmpP)) {
-            overlay::toast("FFmpeg failed. Open ffmpeg-log.txt in the output folder to see why.", overlay::Bad);
-            return;
-        }
-        if (!song.empty()) {
-            char offs[32];
-            std::snprintf(offs, sizeof(offs), "%.3f", off >= 0.f ? off : -off);
-            std::string audioIn = (off >= 0.f ? std::string(" -ss ") : std::string(" -itsoffset ")) + offs + " -i " + q(song);
-            std::string cmd = q(ff) + " -y -hide_banner -nostdin -loglevel error -i " + q(tmp) + audioIn +
-                              " -map 0:v -map 1:a -c:v copy -c:a aac -b:a 192k -shortest " + q(fin);
-            DWORD c2 = 1;
-            if (runProcess(cmd, nullptr, &c2, INFINITE) && c2 == 0) {
-                std::filesystem::remove(tmpP, ec);
-                overlay::toast("Video saved: " + util::pathStr(finP.filename()), overlay::Good);
-                return;
-            }
-            overlay::toast("Couldn't add the music, saved the video without it.", overlay::Warn);
-        }
-        std::filesystem::rename(tmpP, finP, ec);
-        overlay::toast("Video saved: " + util::pathStr(finP.filename()), overlay::Good);
-    }).detach();
+    if (keep && frameCount > 0 && g.recordAudio && beginPass(frameCount)) return;
+    muxLater(pi, g.ffmpeg, g.tmpPath, g.finalPath, g.song, g.songOffset, false, keep, frameCount);
 }
 
 bool screenshot(std::string& savedPath) {
@@ -645,8 +833,40 @@ bool screenshot(std::string& savedPath) {
 
 void onLevelComplete() {
     if (g.active) g.endCountdown = util::maxv(0.02f, cfg().rEndPad);
+    if (g_pass.active && !g_pass.levelDone) {
+        g_pass.levelDone = true;
+        g_pass.endCountdown = util::maxv(0.02f, cfg().rEndPad);
+    }
 }
 
-void onQuit() { stop(true); }
+void onDeath() {
+    if (g_pass.active && !g_pass.levelDone)
+        endPass(false, "The macro died while recording the sound, so the video got the song file instead.");
+}
+
+void tick(float realDt) {
+    if (!g_pass.active) return;
+    double running = util::now() - g_pass.started;
+    if (g_pass.levelDone) {
+        g_pass.endCountdown -= realDt;
+        if (g_pass.endCountdown <= 0.f) endPass(true, "");
+        return;
+    }
+    if (running > 1.0 && bot::state() != bot::State::Play) {
+        endPass(false, "The macro stopped before the end, so the video got the song file instead.");
+        return;
+    }
+    if (running > g_pass.videoSeconds + 30.0) endPass(true, "");  // safety: never record forever
+}
+
+bool audioPassActive() { return g_pass.active; }
+double audioPassSeconds() { return g_pass.active ? util::now() - g_pass.started : 0.0; }
+void cancelAudioPass() { endPass(false, "Sound recording stopped. The video gets the song file instead."); }
+
+void onQuit() {
+    g.recordAudio = false;  // the level is closing: no sound pass
+    stop(true);
+    if (g_pass.active) endPass(false, "Left the level while recording the sound. The video gets the song file instead.");
+}
 
 }  // namespace render

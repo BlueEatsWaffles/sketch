@@ -39,16 +39,30 @@ and macros made with a TPS bypass (not 240) may not play perfectly.
 | | FFmpeg (best) | Built-in (fast) |
 |---|---|---|
 | Install something? | Yes, FFmpeg (free) | No |
-| Quality | Best, you pick the size (up to 4K+) | Lower, size = your game window |
+| Size | 720p up to **8K** (or custom up to 8192 x 8192) | Size = your game window |
+| Frame rate | 30 up to **480 FPS** (or custom up to 1000) | 30 up to **240 FPS** |
 | Music | Yes, adds the level's song | No (silent video) |
 | Speed | Game runs slow while rendering | Records while you play normally |
 | Start | Restarts the level from the start (closes the pause menu too) | Same |
 | GPU encoding | NVIDIA / AMD / Intel if you have them | Yes if Windows finds one |
-| Quality | Pick a quality number **or an exact bitrate** (Mbps) | Low / Medium / High **or an exact bitrate** |
+| Quality | Pick a quality number **or an exact bitrate** (up to 1000 Mbps) | Low / Medium / High **or an exact bitrate** (up to 300 Mbps) |
 
-**Hitboxes & Visuals**: show hitboxes, show on death, only my hitbox, highlight my box, hitbox trail.
-**Hit borders** has its own checkbox (it turns on hitboxes too): thickness, rainbow borders, fill,
-colors for spikes, blocks, orbs/portals, other and player, and an on/off key.
+**Sound in videos (FFmpeg):** pick **Song file** (fast; NONG songs from the Jukebox mod work too) or
+**Record the game**: after the video is made, the macro plays the level once more at normal speed while sketch
+records everything you'd hear (music, NONG songs, sound effects, clicks), then puts that sound into the video.
+It needs a macro playing (Bot tab). Don't touch anything while it records, and keep your game volume up.
+If the sound is a little early or late, use **Sound timing**.
+
+**Hitboxes & Visuals**: show hitboxes, show on death, only my hitbox, highlight my box, hitbox trail, and
+custom hitbox colors (thickness, rainbow, fill, colors for spikes, blocks, orbs/portals, other and player).
+
+**Hit borders** (own checkbox, own key): your player becomes a small yellow dot and every spike, saw and block
+grows by your player's size. The dot crashes exactly when it touches a red border, so tight gaps are easy to read.
+Blocks are blue, orbs/pads/portals green, saws become rounded shapes. A yellow **path line** shows where the dot
+went (with a dark outline so you can always see it), with rings where you clicked. Borders of the same color
+that touch are **joined into one shape**: one even fill and one outline around the outside, no lines inside. You can change the colors,
+fill strength, line thickness and path length.
+
 **Markers**: an X where you died and a dot where you clicked (with a Clear button).
 Also rainbow icon + trail, no wave trail, solid wave trail, no trail, hide player, hide attempts / percent /
 progress bar, exact percentage with decimals.
@@ -86,7 +100,7 @@ squish, theme cards pop in, themes fade into each other. **Bounciness** slider: 
 You need a free GitHub account. GitHub's computers build the mod for you.
 There are **no folders** to upload, just files.
 
-1. Unzip `sketch.zip`.
+1. Unzip the zip I sent (for example `sketch-v1.2.3.zip`).
 2. On github.com, tap **+** (top right), then **New repository**. Name it `sketchbook-menu`,
    tick **Add a README file**, and tap **Create repository**.
 3. Tap **Add file**, then **Upload files**. Pick **all the files** from the unzipped folder
