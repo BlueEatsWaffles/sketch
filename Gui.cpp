@@ -476,8 +476,9 @@ void predictCard() {
         int dots = static_cast<int>(time * 3.f) % 4;
         static char const* const thinking[] = {"Thinking", "Thinking.", "Thinking..", "Thinking..."};
         title = thinking[dots];
-        std::snprintf(buf, sizeof(buf), "Best %.1f%%   -   %s tries   -   %s backtracks", st.bestPercent,
-                      bigNum(st.decisions).c_str(), bigNum(st.backtracks).c_str());
+        std::snprintf(buf, sizeof(buf), "%sBest %.1f%%   -   %s tries   -   %s backtracks",
+                      predictor::twoPlayer() ? "2 players   -   " : "", st.bestPercent, bigNum(st.decisions).c_str(),
+                      bigNum(st.backtracks).c_str());
         detail = buf;
     } else if (done) {
         title = "Beat it!";
@@ -592,7 +593,7 @@ void tabPredict() {
         ui::note(info);
         if (!c.predictName[0]) std::snprintf(c.predictName, sizeof(c.predictName), "%s", predictor::defaultName().c_str());
         ui::inputText("File name##pname", c.predictName, sizeof(c.predictName), predictor::defaultName().c_str());
-        static char const* const formats[] = {"GDR (.gdr) - works in other bots", "Sketchbook (.skm) - this menu"};
+        static char const* const formats[] = {"GDR (.gdr) - works in other bots", "sketch (.skm) - this menu"};
         ui::combo("File type", &c.predictFormat, formats, 2,
                   ".gdr works in Mega Hack, xdBot, zBot, Prism, ToastyReplay and this menu.");
 
@@ -645,7 +646,8 @@ void tabPredict() {
     }
 
     ui::section("Good to know");
-    ui::note("- Normal levels only: no platformer and no 2-player levels (yet).\n"
+    ui::note("- Works on normal and 2-player levels (each player gets its own clicks).\n"
+             "- Platformer levels aren't supported yet.\n"
              "- Hard levels can take a few minutes. Short levels take seconds.\n"
              "- It's in practice mode, so nothing gets saved to your stats.\n"
              "- The file is named after the level, with \" - bot\" at the end.");
@@ -838,6 +840,39 @@ void builtinReport(render::Report const& r) {
                r.builtinGpu ? "yes - extra fast" : "no - your CPU will do it (still works)");
 }
 
+// Video quality: either a simple quality setting or an exact bitrate.
+void bitrateRows(bool ffmpeg) {
+    auto& c = cfg();
+    static char const* const modes[] = {"Quality", "Bitrate"};
+    ui::segmented("##ratemode", &c.rRateMode, modes, 2);
+    if (c.rRateMode == 0) {
+        if (ffmpeg) {
+            ui::sliderInt("Quality (lower = better)", &c.rQuality, 0, 51, "18 looks great. 0 = perfect but huge files.");
+        } else {
+            static char const* const q[] = {"Low", "Medium", "High"};
+            ui::combo("Quality##bq", &c.rBQuality, q, 3, "Higher = nicer video, bigger file.");
+        }
+        return;
+    }
+    ui::sliderFloat("Bitrate", &c.rBitrate, 1.f, 100.f, "%.1f Mbps",
+                    "How much data each second of video gets. More = sharper video and a bigger file.\n"
+                    "1080p 60 FPS: 8-12 is good, 20-40 is great. YouTube likes 12+.");
+    float s = ui::sc();
+    float gap = ImGui::GetStyle().ItemSpacing.x;
+    static float const presets[] = {6.f, 12.f, 25.f, 50.f};
+    static char const* const names[] = {"6 Mbps", "12 Mbps", "25 Mbps", "50 Mbps"};
+    float bw = (ImGui::GetContentRegionAvail().x - 8.f * s - gap * 3.f) / 4.f;
+    for (int i = 0; i < 4; i++) {
+        if (i) ImGui::SameLine();
+        ImGui::PushID(i + 900);
+        if (ui::button(names[i], v2(bw, 0), std::fabs(c.rBitrate - presets[i]) < 0.05f)) c.rBitrate = presets[i];
+        ImGui::PopID();
+    }
+    char b[96];
+    std::snprintf(b, sizeof(b), "About %.0f MB for each minute of video.", static_cast<double>(c.rBitrate) * 7.5);
+    ui::note(b);
+}
+
 void tabRender() {
     auto& c = cfg();
     float s = ui::sc();
@@ -923,7 +958,7 @@ void tabRender() {
         }
         for (auto const& l : encLabels) encPtrs.push_back(l.c_str());
         ui::combo("Encoder", &c.rEncIdx, encPtrs.data(), render::kEncCount, "GPU encoders are much faster if you have one.");
-        ui::sliderInt("Quality (lower = better)", &c.rQuality, 0, 51, "18 looks great. 0 = perfect but huge files.");
+        bitrateRows(true);
         if (c.rEncIdx == 0 || c.rEncIdx == 4) {
             static char const* const pre[] = {"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow"};
             ui::combo("CPU speed", &c.rPresetIdx, pre, 7, "Faster = quicker render, slightly bigger file.");
@@ -935,8 +970,7 @@ void tabRender() {
         std::snprintf(sz, sizeof(sz), "Size: same as your game window (%d x %d)",
                       static_cast<int>(px.width) & ~1, static_cast<int>(px.height) & ~1);
         ui::note(sz);
-        static char const* const q[] = {"Low", "Medium", "High"};
-        ui::combo("Quality##bq", &c.rBQuality, q, 3, "Higher = nicer video, bigger file.");
+        bitrateRows(false);
         static char const* const bf[] = {"30 FPS", "60 FPS"};
         ui::combo("Frame rate##bfps", &c.rBFpsIdx, bf, 2);
         ui::toggle("Real-time (no slow-down)", &c.rBRealtime,
@@ -1051,7 +1085,7 @@ void tabExtra() {
 
     ui::section("Menu");
     ui::keybind("Open / close menu", &c.menuKey);
-    ui::note("You can also change it in Geode: Mods > Sketchbook Menu > Settings (the gear).");
+    ui::note("You can also change it in Geode: Mods > sketch > Settings (the gear).");
     ui::toggle("Popup messages", &c.toasts);
     ui::toggle("Draw mouse cursor in levels", &c.softCursor, "GD hides the mouse in levels. This shows it while the menu is open.");
 

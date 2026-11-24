@@ -1,10 +1,12 @@
-# Sketchbook Menu
+# sketch
+
+by **BlueEatsWaffles**
 
 A notebook-style mod menu for **Geometry Dash 2.2081** (Geode v5, Windows).
 It looks like your drawing: a grey page, light grey side tabs, thick black marker lines.
 
 Press **Tab** in game to open it. To change the key: in the menu go to **Extra** > **Open / close menu**,
-or in Geode go to **Mods** > **Sketchbook Menu** > the **gear** (Settings) > **Menu key**.
+or in Geode go to **Mods** > **sketch** > the **gear** (Settings) > **Menu key**.
 
 ---
 
@@ -18,8 +20,9 @@ run again from 0% to double-check it really works.
 - **Smarts**: look-ahead after a click, double-check from the start, show the bot thinking, thinking speed.
 - **Save the run**: save it as a macro (Bot tab list), save it to your **Downloads**, or type your own folder.
   The file is named `<level name> - bot`. Pick **.gdr** (works in Mega Hack, xdBot, zBot, Prism, ToastyReplay)
-  or **.skm** (this menu). You can also **Watch it** or **Make a video of it**.
-- Normal levels only for now (no platformer, no 2-player). Hard levels can take a few minutes.
+  or **.skm** (sketch). You can also **Watch it** or **Make a video of it**.
+- Works on normal and **2-player** levels (each player gets its own clicks). No platformer levels yet.
+  Hard levels can take a few minutes.
 
 **Bot**: Macro bot (saves your clicks), Replay bot (saves clicks + where the player is, so it never drifts),
 save / load / delete macros, frame stepper (move 1 tick at a time), block my clicks while playing, auto-stop at the end.
@@ -41,6 +44,7 @@ and macros made with a TPS bypass (not 240) may not play perfectly.
 | Speed | Game runs slow while rendering | Records while you play normally |
 | Start | Restarts the level from the start (closes the pause menu too) | Same |
 | GPU encoding | NVIDIA / AMD / Intel if you have them | Yes if Windows finds one |
+| Quality | Pick a quality number **or an exact bitrate** (Mbps) | Low / Medium / High **or an exact bitrate** |
 
 **Hitboxes & Visuals**: show hitboxes, show on death, only my hitbox, highlight my box, hitbox trail.
 **Hit borders** has its own checkbox (it turns on hitboxes too): thickness, rainbow borders, fill,
@@ -82,7 +86,7 @@ squish, theme cards pop in, themes fade into each other. **Bounciness** slider: 
 You need a free GitHub account. GitHub's computers build the mod for you.
 There are **no folders** to upload, just files.
 
-1. Unzip `SketchbookMenu.zip`.
+1. Unzip `sketch.zip`.
 2. On github.com, tap **+** (top right), then **New repository**. Name it `sketchbook-menu`,
    tick **Add a README file**, and tap **Create repository**.
 3. Tap **Add file**, then **Upload files**. Pick **all the files** from the unzipped folder
@@ -91,8 +95,10 @@ There are **no folders** to upload, just files.
    Delete everything in the box, paste in everything from `build-workflow.txt`, then tap **Commit changes**.
 5. The build starts by itself. Go back to the **Actions** tab and wait 5 to 10 minutes for the green tick.
 6. Open the finished run, scroll down to **Artifacts**, and download **Build Output**.
-7. Unzip it. Inside is `sketchbook.sketchbook-menu.geode`.
+7. Unzip it. Inside is `blueeatswaffles.sketch.geode`.
 8. On your PC, put that file in your Geometry Dash folder, in `geode\mods`.
+   **Updating from "Sketchbook Menu"?** Delete the old `sketchbook.sketchbook-menu.geode` from that folder,
+   or you'll get two menus. Your settings and saved macros are copied over by themselves.
    (Steam: right-click Geometry Dash, then **Manage**, then **Browse local files**.)
 9. Start the game and press **Tab**.
 
@@ -135,7 +141,7 @@ For builds that never change, replace `#geode` in `CMakeLists.txt` with a commit
   are not saved while they're on. The dot in the corner shows green (legit), yellow (cheats, safe) or red.
 - Labels and the menu are not recorded in videos. Only the game is.
 - Settings save by themselves to the mod's save folder (`config.txt`). Macros go in `macros\`, videos in `renders\`.
-- Predict's thinking was tested on a pretend practice game, not inside real Geometry Dash yet.
-  It always double-checks its run from the start before saying it won.
+- Predict's thinking was tested on a pretend game (including 2-player and long levels), not inside real
+  Geometry Dash yet. It always double-checks its run from the start before saying it won.
 - This was written and checked with a compiler, but not yet run inside Geometry Dash.
   If something acts weird in game, tell me what happened and I'll fix it.

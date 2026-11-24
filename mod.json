@@ -3,16 +3,16 @@
 	"gd": {
 		"win": "2.2081"
 	},
-	"id": "sketchbook.sketchbook-menu",
-	"name": "Sketchbook Menu",
-	"version": "v1.1.0",
-	"developer": "Sketchbook",
-	"description": "A notebook-style mod menu: macro bot, replay bot, speedhack, video renderer, hitboxes, hit borders, themes and 40+ more features.",
+	"id": "blueeatswaffles.sketch",
+	"name": "sketch",
+	"version": "v1.2.0",
+	"developer": "BlueEatsWaffles",
+	"description": "A hand-drawn notebook mod menu: Predict bot, macro & replay bot, speedhack, video renderer, hitboxes, hit borders, 29 themes and more.",
 	"settings": {
 		"menu-key": {
 			"type": "string",
 			"name": "Menu key",
-			"description": "The key that opens and closes Sketchbook Menu. Inside the menu (Extra tab) you can pick any key you want.",
+			"description": "The key that opens and closes sketch. Inside the menu (Extra tab) you can pick any key you want.",
 			"default": "Tab",
 			"one-of": [
 				"Tab",

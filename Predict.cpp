@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <limits>
 #include <vector>
 
 using namespace geode::prelude;
@@ -17,71 +18,164 @@ namespace predictor {
 
 namespace {
 
+bool g_restoring = false;
+constexpr uint32_t kPending = std::numeric_limits<uint32_t>::max();
+
+// One saved spot: the game's own practice checkpoint plus a few numbers the
+// checkpoint doesn't keep.
+struct Slot {
+    CheckpointObject* cp = nullptr;
+    double extraDelta = 0.0;
+    uint64_t seed = 0;
+};
+
 // ---------------------------------------------------------------------------
 //  Geometry Dash as the planner's "game"
 // ---------------------------------------------------------------------------
 class GdSim : public predict::Sim {
 public:
     PlayLayer* pl = nullptr;
-    std::function<void()> const* stepFn = nullptr;
-    std::vector<CheckpointObject*> slots;
-    bool down = false;
+    std::function<void(float)> const* update = nullptr;
+    std::vector<Slot> slots;
+    bool down[2] = {false, false};
     bool dead = false;
     bool won = false;
+    int who = 0;
+    int nPlayers = 1;
     bool recording = false;
     bot::Macro rec;
+    size_t pending = 0;  // recorded inputs still waiting for their tick number
     std::string level;
+    int attempts = 0;    // keeps the attempt counter from going up on every try
+    uint64_t startSeed = 0;
+    bool haveStartSeed = false;
+
+    int players() override { return nPlayers; }
+    int whoDied() override { return who; }
 
     int snapshot() override {
         if (!pl) return -1;
         CheckpointObject* cp = pl->createCheckpoint();
         if (!cp) return -1;
         cp->retain();
+        Slot s{cp, pl->m_extraDelta, pl->m_randomSeed};
         for (size_t i = 0; i < slots.size(); i++) {
-            if (!slots[i]) {
-                slots[i] = cp;
+            if (!slots[i].cp) {
+                slots[i] = s;
                 return static_cast<int>(i);
             }
         }
-        slots.push_back(cp);
+        slots.push_back(s);
         return static_cast<int>(slots.size() - 1);
     }
 
-    bool restore(int h) override {
-        if (!pl || h < 0 || h >= static_cast<int>(slots.size()) || !slots[static_cast<size_t>(h)]) return false;
-        pl->loadFromCheckpoint(slots[static_cast<size_t>(h)]);
-        down = false;  // checkpoints are only taken with the button up
+    // Loads a checkpoint exactly the way practice mode does when you respawn:
+    // it becomes the only checkpoint and the level resets to it. (Loading it
+    // directly skips the reset, and things like portals and orbs can end up
+    // in the wrong state.) No checkpoint = back to the start.
+    void loadCheckpoint(CheckpointObject* cp) {
+        auto arr = pl->m_checkpointArray;
+        g_restoring = true;
+        if (arr) {
+            arr->removeAllObjects();
+            if (cp) arr->addObject(cp);
+            pl->resetLevel();
+            arr->removeAllObjects();
+        } else if (cp) {
+            pl->loadFromCheckpoint(cp);
+        } else {
+            pl->resetLevelFromStart();
+        }
+        g_restoring = false;
+    }
+
+    // After a load: the game remembers held buttons across checkpoints, so let
+    // go of them for real, and make sure the very next update moves 1 tick.
+    void settle(double extraDelta, uint64_t seed) {
+        bot::inject(pl, false, 1, true);
+        bot::inject(pl, false, 1, false);
+        pl->m_queuedButtons.clear();
+        pl->m_resumeTimer = 0;
+        pl->m_extraDelta = extraDelta;
+        pl->m_randomSeed = seed;
+        pl->m_attempts = attempts;
+        pl->m_started = true;
+        down[0] = down[1] = false;
         dead = won = false;
+        who = 0;
+    }
+
+    bool restore(int h) override {
+        if (!pl || h < 0 || h >= static_cast<int>(slots.size())) return false;
+        Slot const& s = slots[static_cast<size_t>(h)];
+        if (!s.cp) return false;
+        loadCheckpoint(s.cp);
+        settle(s.extraDelta, s.seed);
+        releaseLater();
         return true;
+    }
+
+    // The game keeps a pointer to the checkpoint it last loaded, so that one is
+    // only let go of once the game has moved on to another one.
+    std::vector<CheckpointObject*> later;
+
+    void release(CheckpointObject* cp) {
+        if (!cp) return;
+        if (pl && pl->m_currentCheckpoint == cp) later.push_back(cp);
+        else cp->release();
+    }
+
+    void releaseLater() {
+        for (size_t i = 0; i < later.size();) {
+            if (!pl || pl->m_currentCheckpoint != later[i]) {
+                later[i]->release();
+                later[i] = later.back();
+                later.pop_back();
+            } else {
+                i++;
+            }
+        }
     }
 
     void drop(int h) override {
         if (h < 0 || h >= static_cast<int>(slots.size())) return;
         auto& s = slots[static_cast<size_t>(h)];
-        if (s) s->release();
-        s = nullptr;
+        CheckpointObject* cp = s.cp;
+        s = Slot{};
+        release(cp);
     }
 
     void dropAll() {
-        for (auto& s : slots) {
-            if (s) s->release();
-            s = nullptr;
-        }
+        if (pl) pl->m_currentCheckpoint = nullptr;  // the game doesn't need ours any more
+        for (auto& s : slots)
+            if (s.cp) s.cp->release();
         slots.clear();
+        for (auto cp : later) cp->release();
+        later.clear();
     }
 
-    void setButton(bool d) override {
-        if (!pl || d == down) return;
-        down = d;
+    void setButton(int p, bool d) override {
+        if (!pl || p < 0 || p > 1 || d == down[p]) return;
+        down[p] = d;
         if (recording) {
             bot::Input in;
-            in.frame = bot::frame(pl);
+            in.frame = kPending;  // filled in when the tick starts (same spot the bot plays it back)
             in.button = 1;
             in.down = d;
-            in.p1 = true;
+            in.p1 = p == 0;
             rec.inputs.push_back(in);
+            pending++;
         }
-        bot::inject(pl, d, 1, true);
+        bot::inject(pl, d, 1, p == 0);
+    }
+
+    void stampPending(uint32_t f) {
+        for (size_t i = rec.inputs.size() - pending; i < rec.inputs.size(); i++) rec.inputs[i].frame = f;
+        pending = 0;
+    }
+
+    void tickBegin(GJBaseGameLayer* g) {
+        if (recording && pending) stampPending(bot::frame(g));
     }
 
     static bot::PState grab(PlayerObject* p) {
@@ -94,22 +188,33 @@ public:
         return s;
     }
 
-    predict::StepResult step() override {
-        if (!pl || !stepFn) return predict::StepResult::Dead;
-        dead = won = false;
-        (*stepFn)();
-        if (recording) {
-            uint32_t f = bot::frame(pl);
-            uint32_t every = static_cast<uint32_t>(util::maxv(1, cfg().fixInterval));
-            if ((f % every) == 0 && (rec.fixes.empty() || rec.fixes.back().frame < f)) {
-                bot::Fix x;
-                x.frame = f;
-                x.dual = pl->m_gameState.m_isDualMode;
-                x.a = grab(pl->m_player1);
-                if (x.dual) x.b = grab(pl->m_player2);
-                rec.fixes.push_back(x);
-            }
+    void tickEnd(GJBaseGameLayer* g) {
+        if (!recording) return;
+        uint32_t f = bot::frame(g);
+        uint32_t every = static_cast<uint32_t>(util::maxv(1, cfg().fixInterval));
+        if ((f % every) == 0 && (rec.fixes.empty() || rec.fixes.back().frame < f)) {
+            bot::Fix x;
+            x.frame = f;
+            x.dual = g->m_gameState.m_isDualMode || nPlayers > 1;
+            x.a = grab(g->m_player1);
+            if (x.dual) x.b = grab(g->m_player2);
+            rec.fixes.push_back(x);
         }
+    }
+
+    predict::StepResult step() override {
+        if (!pl || !update) return predict::StepResult::Dead;
+        dead = won = false;
+        uint32_t before = pl->m_gameState.m_currentProgress;
+        pl->m_resumeTimer = 0;
+        (*update)(1.f / 240.f);
+        if (pl->m_gameState.m_currentProgress == before && !dead && !won) {
+            // the game didn't move (it was still waiting to start) - nudge it once
+            pl->m_started = true;
+            pl->m_resumeTimer = 0;
+            (*update)(1.f / 240.f);
+        }
+        if (recording && pending) stampPending(before);
         if (dead) return predict::StepResult::Dead;
         if (won || pl->getCurrentPercent() >= 100.f) return predict::StepResult::Won;
         return predict::StepResult::Alive;
@@ -117,16 +222,20 @@ public:
 
     void restart() override {
         if (!pl) return;
-        pl->resetLevelFromStart();
-        down = true;  // force a real release below
-        setButton(false);
-        dead = won = false;
+        loadCheckpoint(nullptr);
+        releaseLater();
+        if (!haveStartSeed) {
+            startSeed = pl->m_randomSeed;
+            haveStartSeed = true;
+        }
+        settle(0.0, startSeed);
     }
 
     float percent() override { return pl ? pl->getCurrentPercent() : 0.f; }
 
     void setRecording(bool on) override {
         recording = on;
+        pending = 0;
         if (on) {
             rec = bot::Macro{};
             rec.level = level;
@@ -134,17 +243,31 @@ public:
     }
 };
 
+// What the level looked like before Predict started (put back afterwards so
+// your attempts and jumps don't count the bot's thousands of tries).
+struct Saved {
+    int levelAttempts = 0;
+    int levelJumps = 0;
+    int practicePercent = 0;
+    int jumps = 0;
+    bool wasPractice = false;
+};
+
 struct State {
     bool active = false;
+    bool waiting = false;  // waiting for the level to start moving
+    double waited = 0.0;
     GdSim sim;
     predict::Planner planner;
+    predict::Settings settings;
     PlayLayer* pl = nullptr;
+    Saved saved;
     std::chrono::steady_clock::time_point started;
     double finishedAfter = 0.0;
     bool hasResult = false;
+    bool resultTwoPlayer = false;
     bot::Macro result;
     std::string resultLevel;
-    predict::Phase lastPhase = predict::Phase::Idle;
 };
 State g;
 
@@ -154,23 +277,43 @@ std::string levelOf(PlayLayer* pl) {
     return n.empty() ? std::string("level") : n;
 }
 
+void putBackStats() {
+    auto pl = g.pl;
+    if (!pl) return;
+    if (pl->m_level) {
+        pl->m_level->m_attempts = g.saved.levelAttempts;
+        pl->m_level->m_jumps = g.saved.levelJumps;
+        pl->m_level->m_practicePercent = g.saved.practicePercent;
+    }
+    pl->m_jumps = g.saved.jumps;
+}
+
 void finish(bool restartLevel) {
     bool wasActive = g.active;
     g.active = false;
+    g.waiting = false;
     g.finishedAfter = std::chrono::duration<double>(std::chrono::steady_clock::now() - g.started).count();
     g.sim.setRecording(false);
-    g.sim.stepFn = nullptr;
+    g.sim.update = nullptr;
     g.sim.dropAll();
-    if (wasActive && restartLevel && g.pl) {
-        // leave practice mode and go back to the start, ready to watch
-        if (g.pl->m_isPracticeMode) g.pl->togglePracticeMode(false);
-        g.pl->resetLevelFromStart();
+    if (wasActive && g.pl) {
+        if (g.pl->m_checkpointArray) g.pl->m_checkpointArray->removeAllObjects();
+        putBackStats();
+        bot::inject(g.pl, false, 1, true);
+        bot::inject(g.pl, false, 1, false);
+        if (restartLevel) {
+            // back to how you had it, at the start, ready to watch
+            if (g.pl->m_isPracticeMode != g.saved.wasPractice) g.pl->togglePracticeMode(g.saved.wasPractice);
+            g.pl->resetLevelFromStart();
+        }
     }
 }
 
 }  // namespace
 
 bool active() { return g.active; }
+bool restoring() { return g_restoring; }
+bool twoPlayer() { return g.active ? g.sim.nPlayers > 1 : g.resultTwoPlayer; }
 
 bool start(PlayLayer* pl) {
     if (g.active) return true;
@@ -178,19 +321,14 @@ bool start(PlayLayer* pl) {
         overlay::toast("Open a level first, then press Predict.", overlay::Warn);
         return false;
     }
-    if (pl->m_isPlatformer) {
+    if (pl->m_isPlatformer || (pl->m_levelSettings && pl->m_levelSettings->m_platformerMode)) {
         overlay::toast("Platformer levels aren't supported by Predict yet.", overlay::Warn);
-        return false;
-    }
-    if (pl->m_levelSettings && pl->m_levelSettings->m_twoPlayerMode) {
-        overlay::toast("2-player levels aren't supported by Predict yet.", overlay::Warn);
         return false;
     }
     if (bot::state() != bot::State::Idle) bot::stop();
     if (render::active()) render::stop(false);
 
     hacks::restartFromStart(pl);  // closes the pause menu if it's open
-    if (!pl->m_isPracticeMode) pl->togglePracticeMode(true);
 
     auto const& c = cfg();
     predict::Settings s;
@@ -203,23 +341,28 @@ bool start(PlayLayer* pl) {
 
     g = State{};
     g.pl = pl;
+    g.settings = s;
+    g.saved.wasPractice = pl->m_isPracticeMode;
+    if (pl->m_level) {
+        g.saved.levelAttempts = pl->m_level->m_attempts.value();
+        g.saved.levelJumps = pl->m_level->m_jumps.value();
+        g.saved.practicePercent = pl->m_level->m_practicePercent;
+    }
+    g.saved.jumps = pl->m_jumps;
+    if (!pl->m_isPracticeMode) pl->togglePracticeMode(true);
+    if (pl->m_checkpointArray) pl->m_checkpointArray->removeAllObjects();  // your own practice checkpoints
+
     g.sim.pl = pl;
     g.sim.level = levelOf(pl);
+    g.sim.attempts = pl->m_attempts;
+    g.sim.nPlayers = (pl->m_levelSettings && pl->m_levelSettings->m_twoPlayerMode) ? 2 : 1;
     g.resultLevel = g.sim.level;
     g.started = std::chrono::steady_clock::now();
     g.active = true;
-
-    // the planner restarts the level and saves a checkpoint at the start
-    std::function<void()> none = [] {};
-    g.sim.stepFn = &none;
-    g.planner.start(&g.sim, s);
-    g.sim.stepFn = nullptr;
-    if (g.planner.phase() == predict::Phase::Failed) {
-        overlay::toast(g.planner.message(), overlay::Bad);
-        finish(true);
-        return false;
-    }
-    overlay::toast("Predicting... the bot is figuring out the level.", overlay::Info);
+    g.waiting = true;  // the planner starts on the next game update
+    overlay::toast(g.sim.nPlayers > 1 ? "Predicting a 2-player level... the bot is figuring it out."
+                                      : "Predicting... the bot is figuring out the level.",
+                   overlay::Info);
     return true;
 }
 
@@ -233,33 +376,57 @@ void stop(bool restartLevel) {
 void onQuit() {
     if (!g.active) return;
     g.planner.stop();
+    finish(false);  // puts your attempts back and lets go of every checkpoint
     g.pl = nullptr;
-    finish(false);
+    g.sim.pl = nullptr;
 }
 
-void frame(PlayLayer* pl, std::function<void()> const& stepOneTick) {
+void frame(PlayLayer* pl, float realDt, std::function<void(float)> const& update) {
     if (!g.active) return;
     if (pl != g.pl) {
         stop(false);
         return;
     }
-    g.sim.stepFn = &stepOneTick;
+    if (g.waiting) {
+        // Let the level start normally first (it waits a moment after a restart).
+        if (!pl->m_started && g.waited < 3.0) {
+            g.waited += realDt;
+            update(realDt);
+            return;
+        }
+        g.waiting = false;
+        g.sim.update = &update;
+        g.planner.start(&g.sim, g.settings);
+        g.sim.update = nullptr;
+        if (g.planner.phase() == predict::Phase::Failed) {
+            overlay::toast(g.planner.message(), overlay::Bad);
+            finish(true);
+            return;
+        }
+    }
+
+    g.sim.update = &update;
     auto t0 = std::chrono::steady_clock::now();
     double budget = util::clamp(cfg().predictBudget, 4, 60) / 1000.0;
     while (true) {
         auto ph = g.planner.phase();
         if (ph != predict::Phase::Searching && ph != predict::Phase::Verifying) break;
-        g.planner.run(240);
+        g.planner.run(120);
         if (std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() > budget) break;
     }
     auto ph = g.planner.phase();
+    // show where the bot has got to (instead of whatever it was just trying)
     if (ph == predict::Phase::Searching && cfg().predictShow) g.planner.showFrontier();
-    g.sim.stepFn = nullptr;
+    g.sim.update = nullptr;
 
     if (ph == predict::Phase::Done) {
         g.result = g.sim.rec;
         g.result.level = g.resultLevel;
+        // inputs that never reached a tick (shouldn't happen) go at the end
+        for (auto& in : g.result.inputs)
+            if (in.frame == kPending) in.frame = g.result.fixes.empty() ? 0u : g.result.fixes.back().frame;
         g.hasResult = !g.result.inputs.empty() || !g.result.fixes.empty();
+        g.resultTwoPlayer = g.sim.nPlayers > 1;
         finish(true);
         if (g.hasResult) {
             std::snprintf(cfg().predictName, sizeof(cfg().predictName), "%s", defaultName().c_str());
@@ -272,15 +439,29 @@ void frame(PlayLayer* pl, std::function<void()> const& stepOneTick) {
         finish(true);
         overlay::toast(msg, overlay::Bad);
     }
-    g.lastPhase = ph;
 }
 
-void onDeath() { g.sim.dead = true; }
+void tickBegin(GJBaseGameLayer* gl) {
+    if (g.active) g.sim.tickBegin(gl);
+}
+
+void tickEnd(GJBaseGameLayer* gl) {
+    if (g.active) g.sim.tickEnd(gl);
+}
+
+void onDeath(PlayerObject* who) {
+    g.sim.dead = true;
+    g.sim.who = (g.pl && who && who == g.pl->m_player2) ? 1 : 0;
+}
+
 void onWin() { g.sim.won = true; }
 
-predict::Phase phase() { return g.active ? g.planner.phase() : (g.hasResult ? predict::Phase::Done : g.planner.phase()); }
+predict::Phase phase() {
+    if (g.active && g.waiting) return predict::Phase::Searching;
+    return g.active ? g.planner.phase() : (g.hasResult ? predict::Phase::Done : g.planner.phase());
+}
 predict::Stats stats() { return g.planner.stats(); }
-std::string message() { return g.planner.message(); }
+std::string message() { return g.waiting ? std::string("Getting ready...") : g.planner.message(); }
 
 double elapsed() {
     if (g.active) return std::chrono::duration<double>(std::chrono::steady_clock::now() - g.started).count();
@@ -289,6 +470,7 @@ double elapsed() {
 
 float percentDone() {
     auto const& st = g.planner.stats();
+    if (!g.active && g.hasResult) return 100.f;
     if (g.planner.phase() == predict::Phase::Done) return 100.f;
     return util::clamp(st.bestPercent, 0.f, 100.f);
 }
@@ -338,7 +520,7 @@ bool saveToFolder(std::string const& folder, std::string const& name, int format
     clicks.reserve(g.result.inputs.size());
     for (auto const& i : g.result.inputs) clicks.push_back({i.frame, i.button, i.p1, i.down});
     double duration = g.result.inputs.empty() ? 0.0 : g.result.inputs.back().frame / 240.0;
-    auto bytes = importer::writeGdr(clicks, g.resultLevel, "Sketchbook Predict", duration);
+    auto bytes = importer::writeGdr(clicks, g.resultLevel, "sketch Predict", duration);
     auto path = dir / util::u8path(n + ".gdr");
     std::ofstream o(path, std::ios::binary | std::ios::trunc);
     if (!o) {

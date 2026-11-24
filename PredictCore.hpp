@@ -3,8 +3,8 @@
 // with a pretend game. Predict.cpp connects it to Geometry Dash.
 //
 // How it thinks:
-//  1. From where it is, it lets the level run without clicking until the
-//     player would die (or the level ends).
+//  1. From where it is, it lets the level run without changing anything until
+//     a player would die (or the level ends).
 //  2. It then tries a click (or a release) at each tick before that death and
 //     keeps the ones that get the player safely past it. That gives a timing
 //     window: earliest .. latest.
@@ -12,9 +12,13 @@
 //     moves on. The other timings are kept as backups.
 //  4. If it ever gets stuck (nothing works), it backtracks: it goes back to
 //     the last click and tries a backup timing, and further back if needed.
+//     If it's stuck for a long time it thinks harder (looks further ahead).
 //  5. When it reaches the end, it replays everything from the very start to
 //     double-check. If that run dies, it repairs the run from just before
 //     that spot and tries again.
+//
+// 2-player levels: each player has its own button. When a player dies, the
+// planner first tries changing that player's button, then the other one.
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -27,14 +31,16 @@ enum class StepResult { Alive, Dead, Won };
 class Sim {
 public:
     virtual ~Sim() = default;
-    virtual int snapshot() = 0;           // save the current state, return a handle (-1 = failed)
-    virtual bool restore(int handle) = 0;  // go back to a saved state
+    virtual int snapshot() = 0;            // save the current state, return a handle (-1 = failed)
+    virtual bool restore(int handle) = 0;  // go back to a saved state (all buttons released afterwards)
     virtual void drop(int handle) = 0;     // forget a saved state
-    virtual void setButton(bool down) = 0; // press / release (takes effect on the next step)
+    virtual void setButton(int player, bool down) = 0;  // press / release (takes effect on the next step)
     virtual StepResult step() = 0;         // advance one physics tick
-    virtual void restart() = 0;            // back to the very start of the level, button released
+    virtual void restart() = 0;            // back to the very start of the level, buttons released
     virtual float percent() = 0;           // how far into the level (0..100)
     virtual void setRecording(bool on) = 0;  // record the final, double-checked run
+    virtual int players() { return 1; }    // 2 = two-player level (player 2 has its own button)
+    virtual int whoDied() { return 0; }    // which player died in the last step (0 or 1)
 };
 
 enum class Timing { Early = 0, Normal = 1, Late = 2 };
@@ -48,8 +54,9 @@ struct Settings {
     int maxSnaps = 320;     // keep at most this many checkpoints
     int maxOptions = 8;     // backup timings kept per click
     int maxRepairs = 8;     // how many times the double-check may repair the run
-    long long maxSteps = 60'000'000;  // give up after this many simulated ticks
-    long long stuckSteps = 4'000'000; // give up if it makes no progress for this many ticks
+    int harder = 2;         // how many times it may "think harder" before giving up
+    long long maxSteps = 80'000'000;  // give up after this many simulated ticks
+    long long stuckSteps = 4'000'000; // think harder / give up after this many ticks without progress
     bool verify = true;     // double-check from the start
 };
 
@@ -58,6 +65,7 @@ enum class Phase { Idle, Searching, Verifying, Done, Failed };
 struct Toggle {
     uint32_t tick;
     bool down;
+    uint8_t player = 0;  // 0 = player 1, 1 = player 2
 };
 
 struct Stats {
@@ -65,6 +73,7 @@ struct Stats {
     long long backtracks = 0;
     long long decisions = 0;
     int repairs = 0;
+    int harder = 0;
     float bestPercent = 0.f;
     uint32_t frontier = 0;
     size_t depth = 0;
@@ -90,14 +99,15 @@ private:
     };
     struct Choice {
         uint32_t baseTick;
-        bool baseHeld;
+        uint8_t baseHeld;
+        uint8_t player;
         size_t baseTl;
         std::vector<uint32_t> options;
         size_t idx = 0;
     };
     struct Frontier {
         uint32_t tick = 0;
-        bool held = false;
+        uint8_t held = 0;  // bit 0 = player 1 holding, bit 1 = player 2 holding
         bool fromToggle = false;
     };
     enum class Run { Dead, Won, Survived, Broken };
@@ -108,26 +118,30 @@ private:
 
     // state helpers
     bool gotoTick(uint32_t tick);
-    bool heldAt(uint32_t tick) const;
+    uint8_t heldAt(uint32_t tick) const;
+    void applyHeld(uint8_t held);
     void addSnap(uint32_t tick);
     void pruneSnaps(uint32_t afterTick);
     void trimSnaps();
     void dropAllSnaps();
-    RunResult runTo(uint32_t fromTick, uint32_t untilTick, std::vector<uint32_t> const& extras, bool makeSnaps);
+    RunResult runTo(uint32_t fromTick, uint32_t untilTick, std::vector<Toggle> const& extras, bool makeSnaps);
     StepResult step();
 
     // search
     void expand();
-    RunResult test(std::vector<uint32_t> const& toggles, uint32_t mustPass);
-    bool tryToggle(uint32_t t, uint32_t death);
-    void pushChoice(std::vector<uint32_t> const& window);
-    bool rescuePairs(uint32_t death, int64_t lo);
+    RunResult test(std::vector<Toggle> const& toggles, uint32_t mustPass);
+    bool tryToggle(uint32_t t, int player, uint32_t death);
+    bool searchWindow(int player, uint32_t death, int64_t lo);
+    void pushChoice(std::vector<uint32_t> const& window, int player);
+    bool rescuePairs(int player, uint32_t death, int64_t lo);
     bool backtrack();
+    bool thinkHarder();
     void beginVerify();
     void verifyChunk(long long budget);
 
     Sim* m_sim = nullptr;
     Settings m_set;
+    int m_players = 1;
     Phase m_phase = Phase::Idle;
     Stats m_stats;
     std::string m_msg;
@@ -138,6 +152,7 @@ private:
     long long m_budget = 0;
     uint32_t m_cur = 0;     // tick the game is at right now
     bool m_curValid = false;
+    int m_lastWho = 0;      // who died in the last run
     // verify state
     uint32_t m_winTick = 0;
     bool m_exact = false;           // don't trust checkpoints after this tick (they were wrong before)

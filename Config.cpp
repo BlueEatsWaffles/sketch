@@ -71,7 +71,7 @@ void visitAll(MenuConfig& c, V& v) {
     F(noTransition); F(unlockAll); F(restartKey); F(practiceKey); F(screenshotKey); F(muteUnfocused);
     // render
     F(rEngine); F(rBQuality); F(rBFpsIdx); F(rBRealtime);
-    F(ffmpegPath); F(renderDir); F(rResIdx); F(rW); F(rH); F(rFpsIdx); F(rEncIdx); F(rQuality);
+    F(ffmpegPath); F(renderDir); F(rResIdx); F(rW); F(rH); F(rFpsIdx); F(rEncIdx); F(rQuality); F(rRateMode); F(rBitrate);
     F(rPresetIdx); F(rExtra); F(rMusic); F(rMusicOffset); F(rEndPad); F(rRestart); F(rAutoWithBot); F(rCloseMenu);
 #undef F
     visitTheme("custom.", c.custom, v);
@@ -178,6 +178,8 @@ void sanitize(MenuConfig& c) {
     c.rW = clamp(c.rW, 128, 7680);
     c.rH = clamp(c.rH, 128, 4320);
     c.rQuality = clamp(c.rQuality, 0, 51);
+    c.rRateMode = clamp(c.rRateMode, 0, 1);
+    c.rBitrate = clamp(c.rBitrate, 0.5f, 150.f);
     c.respawnDelay = clamp(c.respawnDelay, 0.f, 5.f);
     c.rEngine = clamp(c.rEngine, 0, 1);
     c.importOffset = clamp(c.importOffset, -20, 20);
@@ -200,7 +202,25 @@ void sanitize(MenuConfig& c) {
 
 }  // namespace
 
+// The mod used to be called "Sketchbook Menu" (id sketchbook.sketchbook-menu).
+// Bring its settings and saved macros over the first time the new one starts.
+static void migrateOldSave() {
+    std::error_code ec;
+    auto now = Mod::get()->getSaveDir();
+    auto old = now.parent_path() / "sketchbook.sketchbook-menu";
+    if (std::filesystem::exists(now / "config.txt", ec) || !std::filesystem::exists(old, ec)) return;
+    std::filesystem::create_directories(now, ec);
+    std::filesystem::copy_file(old / "config.txt", now / "config.txt", std::filesystem::copy_options::skip_existing, ec);
+    if (std::filesystem::exists(old / "macros", ec)) {
+        std::filesystem::create_directories(now / "macros", ec);
+        std::filesystem::copy(old / "macros", now / "macros",
+                              std::filesystem::copy_options::recursive | std::filesystem::copy_options::skip_existing, ec);
+    }
+    log::info("sketch: copied settings and macros from the old Sketchbook Menu");
+}
+
 void loadConfig() {
+    migrateOldSave();
     std::ifstream in(configPath());
     if (!in) {
         lastSaved() = serialize();
@@ -225,7 +245,7 @@ void saveConfig() {
     std::filesystem::create_directories(configPath().parent_path(), ec);
     std::ofstream out(configPath(), std::ios::binary | std::ios::trunc);
     if (!out) {
-        log::warn("Sketchbook: could not write config file");
+        log::warn("sketch: could not write config file");
         return;
     }
     out << data;

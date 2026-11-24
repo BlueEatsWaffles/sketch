@@ -9,7 +9,7 @@
 //   old xdBot                       -> .xd
 //
 // Every click is turned into a "tick" of the game's 240-per-second physics,
-// which is what the Sketchbook bot plays back.
+// which is what the sketch bot plays back.
 #include <cstdint>
 #include <string>
 #include <vector>

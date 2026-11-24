@@ -1,4 +1,4 @@
-// Sketchbook Menu - entry point.
+// sketch (by BlueEatsWaffles) - entry point.
 #include "Config.hpp"
 #include "Gui.hpp"
 

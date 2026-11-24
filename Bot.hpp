@@ -64,7 +64,7 @@ void inject(GJBaseGameLayer* g, bool down, int button, bool p1);
 std::filesystem::path folder();
 std::vector<std::string> list();
 bool save(std::string const& name, std::string& err);
-// Writes any macro to any path in the Sketchbook format (.skm).
+// Writes any macro to any path in the sketch format (.skm).
 bool writeFile(std::filesystem::path const& path, Macro const& m, std::string& err);
 bool load(std::string const& name, std::string& err);
 bool remove(std::string const& name);

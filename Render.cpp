@@ -145,6 +145,7 @@ void resolution(int& w, int& h) {
 
 // Built-in renderer bitrate: Low / Medium / High, adjusted for size and FPS.
 unsigned builtinBitrate(int w, int h, int fps) {
+    if (cfg().rRateMode == 1) return static_cast<unsigned>(util::clamp(cfg().rBitrate, 0.5f, 150.f) * 1000000.0);
     static double const mbps[] = {5.0, 10.0, 20.0};
     double base = mbps[util::clamp(cfg().rBQuality, 0, 2)];
     double scale = (static_cast<double>(w) * static_cast<double>(h)) / (1920.0 * 1080.0) * (static_cast<double>(fps) / 60.0);
@@ -156,6 +157,20 @@ std::string qualityArgs(int enc) {
     auto const& c = cfg();
     static char const* presets[] = {"ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow"};
     std::string qv = std::to_string(util::clamp(c.rQuality, 0, 51));
+    if (c.rRateMode == 1) {
+        // a fixed bitrate (size of the video per second) instead of a quality number
+        int kb = static_cast<int>(util::clamp(c.rBitrate, 0.5f, 150.f) * 1000.f);
+        std::string rate = "-b:v " + std::to_string(kb) + "k -maxrate " + std::to_string(kb * 3 / 2) + "k -bufsize " +
+                           std::to_string(kb * 2) + "k";
+        switch (enc) {
+            case 0:
+            case 4: return std::string("-preset ") + presets[util::clamp(c.rPresetIdx, 0, 6)] + " " + rate;
+            case 1:
+            case 5: return "-preset p5 -rc vbr " + rate;
+            case 2: return "-quality quality -rc vbr_peak " + rate;
+            default: return rate;
+        }
+    }
     switch (enc) {
         case 0:
         case 4: return std::string("-preset ") + presets[util::clamp(c.rPresetIdx, 0, 6)] + " -crf " + qv;
@@ -371,7 +386,7 @@ bool startFfmpeg(std::string const& ff, std::filesystem::path const& dir) {
         overlay::toast("Could not start FFmpeg. Check the path in the Setup report.", overlay::Bad);
         return false;
     }
-    log::info("Sketchbook render (FFmpeg): {}", cmd);
+    log::info("sketch render (FFmpeg): {}", cmd);
     g.hIn = wrh;
     g.pi = pi;
     g.realtime = false;
@@ -390,7 +405,7 @@ bool startBuiltin() {
         overlay::toast(err, overlay::Bad);
         return false;
     }
-    log::info("Sketchbook render (built-in): {}x{} @ {} fps, {} bit/s", g.cw, g.ch, g.fps, br);
+    log::info("sketch render (built-in): {}x{} @ {} fps, {} bit/s", g.cw, g.ch, g.fps, br);
     g.realtime = c.rBRealtime;
     g.acc = 0.0;
     return true;

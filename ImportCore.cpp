@@ -870,7 +870,7 @@ std::vector<uint8_t> writeGdr(std::vector<Click> const& clicks, std::string cons
     MpOut o;
     o.map(12);
     o.str("gameVersion"); o.f64(2.2081);
-    o.str("description"); o.str("Made by the Sketchbook Menu Predict bot");
+    o.str("description"); o.str("Made by the sketch Predict bot");
     o.str("version"); o.f64(1.0);
     o.str("duration"); o.f64(duration);
     o.str("bot"); o.map(2); o.str("name"); o.str(botName); o.str("version"); o.str("1.0");

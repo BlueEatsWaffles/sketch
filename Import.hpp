@@ -5,7 +5,7 @@
 
 // ---------------------------------------------------------------------------
 //  Finds macros made by other bots (Eclipse, Mega Hack, xdBot, zBot, Prism,
-//  yBot 2, ToastyReplay) on this PC and loads them into the Sketchbook bot.
+//  yBot 2, ToastyReplay) on this PC and loads them into the sketch bot.
 // ---------------------------------------------------------------------------
 namespace imports {
 

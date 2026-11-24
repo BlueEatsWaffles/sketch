@@ -9,6 +9,7 @@ namespace predict {
 
 namespace {
 int64_t i64(uint32_t v) { return static_cast<int64_t>(v); }
+bool bit(uint8_t mask, int p) { return ((mask >> p) & 1u) != 0; }
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -22,12 +23,14 @@ void Planner::start(Sim* sim, Settings const& s) {
     if (m_set.snapEvery < 1) m_set.snapEvery = 1;
     if (m_set.maxOptions < 1) m_set.maxOptions = 1;
     if (m_set.maxSnaps < 8) m_set.maxSnaps = 8;
+    m_players = sim->players() >= 2 ? 2 : 1;
     m_stats = Stats{};
     m_farthest = 0;
     m_farthestAt = 0;
     m_winTick = 0;
     m_exact = false;
     m_exactBase = 0;
+    m_lastWho = 0;
     m_tl.clear();
     m_choices.clear();
     m_front = Frontier{};
@@ -47,7 +50,11 @@ void Planner::start(Sim* sim, Settings const& s) {
 
 void Planner::stop() {
     dropAllSnaps();
-    if (m_sim) m_sim->setRecording(false);
+    if (m_sim) {
+        for (auto const& s : m_vSnaps) m_sim->drop(s.handle);
+        m_sim->setRecording(false);
+    }
+    m_vSnaps.clear();
     if (m_phase == Phase::Searching || m_phase == Phase::Verifying) {
         m_phase = Phase::Idle;
         m_msg = "Stopped.";
@@ -99,13 +106,18 @@ void Planner::dropAllSnaps() {
     m_snaps.clear();
 }
 
-bool Planner::heldAt(uint32_t tick) const {
-    bool held = false;
+uint8_t Planner::heldAt(uint32_t tick) const {
+    uint8_t held = 0;
     for (auto const& e : m_tl) {
         if (e.tick >= tick) break;
-        held = e.down;
+        if (e.down) held = static_cast<uint8_t>(held | (1u << e.player));
+        else held = static_cast<uint8_t>(held & ~(1u << e.player));
     }
     return held;
+}
+
+void Planner::applyHeld(uint8_t held) {
+    for (int p = 0; p < m_players; p++) m_sim->setButton(p, bit(held, p));
 }
 
 // Puts the game at the start of `tick` on the committed path.
@@ -120,7 +132,7 @@ bool Planner::gotoTick(uint32_t tick) {
         if (!m_sim->restore(it->handle)) return false;
         m_cur = it->tick;
         m_curValid = true;
-        m_sim->setButton(false);
+        applyHeld(0);  // checkpoints are only taken with every button up
     }
     RunResult r = runTo(m_cur, tick, {}, false);
     return r.kind == Run::Survived;
@@ -138,33 +150,37 @@ StepResult Planner::step() {
 }
 
 // Runs from the start of `fromTick` (the game must be there) to the start of
-// `untilTick`, using the committed clicks plus one optional extra toggle.
-Planner::RunResult Planner::runTo(uint32_t fromTick, uint32_t untilTick, std::vector<uint32_t> const& extras, bool makeSnaps) {
-    bool held = heldAt(fromTick);
-    m_sim->setButton(held);
+// `untilTick`, using the committed clicks plus a few extra toggles (sorted).
+Planner::RunResult Planner::runTo(uint32_t fromTick, uint32_t untilTick, std::vector<Toggle> const& extras, bool makeSnaps) {
+    uint8_t held = heldAt(fromTick);
+    applyHeld(held);
     auto ev = std::lower_bound(m_tl.begin(), m_tl.end(), fromTick, [](Toggle const& e, uint32_t t) { return e.tick < t; });
     size_t xi = 0;
     uint32_t lastSnap = m_snaps.empty() ? 0 : m_snaps.back().tick;
     for (uint32_t k = fromTick; k < untilTick; k++) {
-        bool onPath = extras.empty() || k <= extras.front();
-        if (makeSnaps && onPath && !held && k > lastSnap && k - lastSnap >= static_cast<uint32_t>(m_set.snapEvery)) {
+        bool onPath = extras.empty() || k <= extras.front().tick;
+        if (makeSnaps && onPath && held == 0 && k > lastSnap && k - lastSnap >= static_cast<uint32_t>(m_set.snapEvery)) {
             m_cur = k;
             m_curValid = true;
             addSnap(k);
             lastSnap = k;
         }
         while (ev != m_tl.end() && ev->tick == k) {
-            held = ev->down;
-            m_sim->setButton(held);
+            if (ev->down) held = static_cast<uint8_t>(held | (1u << ev->player));
+            else held = static_cast<uint8_t>(held & ~(1u << ev->player));
+            m_sim->setButton(ev->player, ev->down);
             ++ev;
         }
-        while (xi < extras.size() && extras[xi] == k) {
-            held = !held;
-            m_sim->setButton(held);
+        while (xi < extras.size() && extras[xi].tick == k) {
+            int p = extras[xi].player;
+            bool d = !bit(held, p);
+            held = static_cast<uint8_t>(held ^ (1u << p));
+            m_sim->setButton(p, d);
             xi++;
         }
         StepResult r = step();
         if (r == StepResult::Dead) {
+            m_lastWho = m_players > 1 ? (m_sim->whoDied() == 1 ? 1 : 0) : 0;
             m_curValid = false;
             return {Run::Dead, k};
         }
@@ -174,7 +190,7 @@ Planner::RunResult Planner::runTo(uint32_t fromTick, uint32_t untilTick, std::ve
         }
     }
     m_cur = untilTick;
-    m_curValid = extras.empty() || untilTick <= extras.front();
+    m_curValid = extras.empty() || untilTick <= extras.front().tick;
     return {Run::Survived, untilTick};
 }
 
@@ -183,46 +199,105 @@ Planner::RunResult Planner::runTo(uint32_t fromTick, uint32_t untilTick, std::ve
 // ---------------------------------------------------------------------------
 
 // Tries extra toggles (sorted) from the committed path; survives = gets past `mustPass` + margin.
-Planner::RunResult Planner::test(std::vector<uint32_t> const& toggles, uint32_t mustPass) {
-    if (!gotoTick(toggles.front())) return {Run::Broken, toggles.front()};
-    return runTo(toggles.front(), mustPass + static_cast<uint32_t>(m_set.margin) + 1, toggles, false);
+Planner::RunResult Planner::test(std::vector<Toggle> const& toggles, uint32_t mustPass) {
+    if (!gotoTick(toggles.front().tick)) return {Run::Broken, toggles.front().tick};
+    return runTo(toggles.front().tick, mustPass + static_cast<uint32_t>(m_set.margin) + 1, toggles, false);
 }
 
-bool Planner::tryToggle(uint32_t t, uint32_t death) {
-    RunResult r = test({t}, death);
+bool Planner::tryToggle(uint32_t t, int player, uint32_t death) {
+    RunResult r = test({Toggle{t, false, static_cast<uint8_t>(player)}}, death);
     return r.kind == Run::Survived || r.kind == Run::Won;
 }
 
-// No single click works: try two in a row (like "let go, then click again").
-// Returns true if it found some and pushed a choice for the first one.
-bool Planner::rescuePairs(uint32_t death, int64_t lo) {
-    std::vector<uint32_t> firsts;
-    int tried = 0;
-    for (int64_t t = death; t >= lo && tried < 36 && static_cast<int>(firsts.size()) < m_set.maxOptions; t -= 4, tried++) {
-        RunResult r1 = test({static_cast<uint32_t>(t)}, death);
-        if (r1.kind == Run::Survived || r1.kind == Run::Won) {
-            firsts.push_back(static_cast<uint32_t>(t));
-            continue;
+// Looks for a working click/release of `player` before `death`. Pushes a choice if found.
+bool Planner::searchWindow(int player, uint32_t death, int64_t lo) {
+    // Latest timing that works: check every 2nd tick first (half the tries),
+    // then fill in the ticks that were skipped.
+    int64_t latest = -1;
+    for (int64_t t = death; t >= lo; t -= 2) {
+        if (tryToggle(static_cast<uint32_t>(t), player, death)) {
+            latest = t;
+            break;
         }
-        if (r1.kind != Run::Dead || r1.tick <= t) continue;
-        uint32_t d1 = r1.tick;
-        uint32_t pass = std::max(death, d1);
-        int tried2 = 0;
-        for (int64_t t2 = d1; t2 > t && tried2 < 48; t2--, tried2++) {
-            RunResult r2 = test({static_cast<uint32_t>(t), static_cast<uint32_t>(t2)}, pass);
-            if (r2.kind == Run::Survived || r2.kind == Run::Won) {
-                firsts.push_back(static_cast<uint32_t>(t));
+    }
+    if (latest >= 0) {
+        if (latest + 1 <= i64(death) && tryToggle(static_cast<uint32_t>(latest + 1), player, death)) latest++;
+    } else {
+        for (int64_t t = i64(death) - 1; t >= lo; t -= 2) {
+            if (tryToggle(static_cast<uint32_t>(t), player, death)) {
+                latest = t;
                 break;
             }
         }
     }
-    if (firsts.empty()) return false;
-    std::sort(firsts.begin(), firsts.end());
-    pushChoice(firsts);
+    if (latest < 0) return false;
+    // Find the earliest timing that still works, without testing every tick:
+    // jump back 1, 2, 4, 8... ticks while it works, then narrow down.
+    int64_t good = latest, bad = lo - 1;
+    for (int64_t stepBack = 1; good - stepBack >= lo; stepBack *= 2) {
+        int64_t t = good - stepBack;
+        if (tryToggle(static_cast<uint32_t>(t), player, death)) {
+            good = t;
+        } else {
+            bad = t;
+            break;
+        }
+        if (latest - good > 160) break;
+    }
+    while (bad + 1 < good) {
+        int64_t mid = (bad + good) / 2;
+        if (tryToggle(static_cast<uint32_t>(mid), player, death)) good = mid;
+        else bad = mid;
+    }
+    std::vector<uint32_t> window;
+    for (int64_t t = good; t <= latest; t++) window.push_back(static_cast<uint32_t>(t));
+    pushChoice(window, player);
     return true;
 }
 
-void Planner::pushChoice(std::vector<uint32_t> const& window) {
+// No single click works: try two in a row (like "let go, then click again"),
+// and on 2-player levels "player 1 clicks, then player 2 clicks".
+// Returns true if it found some and pushed a choice for the first one.
+bool Planner::rescuePairs(int player, uint32_t death, int64_t lo) {
+    std::vector<uint32_t> firsts;
+    int tried = 0;
+    uint8_t pl = static_cast<uint8_t>(player);
+    for (int64_t t = death; t >= lo && tried < 36 && static_cast<int>(firsts.size()) < m_set.maxOptions; t -= 4, tried++) {
+        uint32_t ut = static_cast<uint32_t>(t);
+        RunResult r1 = test({Toggle{ut, false, pl}}, death);
+        if (r1.kind == Run::Survived || r1.kind == Run::Won) {
+            firsts.push_back(ut);
+            continue;
+        }
+        if (r1.kind != Run::Dead || r1.tick <= ut) continue;
+        uint32_t d1 = r1.tick;
+        uint32_t pass = std::max(death, d1);
+        int who1 = m_lastWho;
+        int order[2] = {who1, 1 - who1};
+        int count = m_players > 1 ? 2 : 1;
+        if (count == 1) order[0] = player;
+        bool found = false;
+        for (int qi = 0; qi < count && !found; qi++) {
+            int q = order[qi];
+            int64_t stop = q == player ? t : t - 1;  // the same player can't toggle twice in one tick
+            int tried2 = 0;
+            for (int64_t t2 = d1; t2 > stop && tried2 < 48; t2--, tried2++) {
+                RunResult r2 = test({Toggle{ut, false, pl}, Toggle{static_cast<uint32_t>(t2), false, static_cast<uint8_t>(q)}}, pass);
+                if (r2.kind == Run::Survived || r2.kind == Run::Won) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (found) firsts.push_back(ut);
+    }
+    if (firsts.empty()) return false;
+    std::sort(firsts.begin(), firsts.end());
+    pushChoice(firsts, player);
+    return true;
+}
+
+void Planner::pushChoice(std::vector<uint32_t> const& window, int player) {
     // window is sorted from earliest to latest
     uint32_t E = window.front(), L = window.back();
     uint32_t pref = m_set.timing == Timing::Early ? E : (m_set.timing == Timing::Late ? L : static_cast<uint32_t>((i64(E) + i64(L)) / 2));
@@ -242,15 +317,17 @@ void Planner::pushChoice(std::vector<uint32_t> const& window) {
     Choice c;
     c.baseTick = m_front.tick;
     c.baseHeld = m_front.held;
+    c.player = static_cast<uint8_t>(player);
     c.baseTl = m_tl.size();
     c.options = std::move(pick);
     c.idx = 0;
     m_choices.push_back(c);
 
     uint32_t t = m_choices.back().options[0];
+    bool down = !bit(c.baseHeld, player);
     pruneSnaps(t);
-    m_tl.push_back({t, !c.baseHeld});
-    m_front = {t, !c.baseHeld, true};
+    m_tl.push_back({t, down, c.player});
+    m_front = {t, static_cast<uint8_t>(c.baseHeld ^ (1u << player)), true};
     m_curValid = false;
     m_stats.decisions++;
 }
@@ -261,10 +338,11 @@ bool Planner::backtrack() {
         c.idx++;
         if (c.idx < c.options.size()) {
             uint32_t t = c.options[c.idx];
+            bool down = !bit(c.baseHeld, c.player);
             m_tl.resize(c.baseTl);
             pruneSnaps(t);
-            m_tl.push_back({t, !c.baseHeld});
-            m_front = {t, !c.baseHeld, true};
+            m_tl.push_back({t, down, c.player});
+            m_front = {t, static_cast<uint8_t>(c.baseHeld ^ (1u << c.player)), true};
             m_curValid = false;
             m_stats.backtracks++;
             return true;
@@ -274,16 +352,48 @@ bool Planner::backtrack() {
     return false;
 }
 
+// Stuck for a long time: look further ahead and keep more backups, then go back
+// a few clicks and try again from there.
+bool Planner::thinkHarder() {
+    if (m_stats.harder >= m_set.harder) return false;
+    m_stats.harder++;
+    m_set.margin = m_set.margin * 2 + 12;
+    m_set.maxWindow = m_set.maxWindow * 2;
+    m_set.maxOptions += 4;
+    // forget the last few decisions so they get remade with the new settings
+    size_t keep = m_choices.size() > 6 ? m_choices.size() - 6 : 0;
+    if (keep < m_choices.size()) {
+        Choice const& c = m_choices[keep];
+        m_tl.resize(c.baseTl);
+        bool afterToggle = c.baseTl > 0 && m_tl[c.baseTl - 1].tick == c.baseTick;
+        m_front = {c.baseTick, c.baseHeld, afterToggle};
+        m_choices.resize(keep);
+        pruneSnaps(m_front.tick);
+        if (m_snaps.empty()) {
+            m_sim->restart();
+            m_cur = 0;
+            m_curValid = true;
+            addSnap(0);
+        }
+    }
+    m_curValid = false;
+    m_farthestAt = m_stats.steps + 1;
+    m_msg = "This part is tricky. Thinking harder...";
+    return true;
+}
+
 void Planner::expand() {
     Frontier f = m_front;
     m_stats.frontier = f.tick;
     if (f.tick > m_farthest || m_farthestAt == 0) {
         m_farthest = std::max(m_farthest, f.tick);
         m_farthestAt = m_stats.steps + 1;
+        if (m_stats.harder == 0) m_msg = "Thinking...";
     } else if (m_stats.steps - m_farthestAt > m_set.stuckSteps) {
+        if (thinkHarder()) return;
         m_phase = Phase::Failed;
         char buf[160];
-        std::snprintf(buf, sizeof(buf), "Stuck at %.1f%% for too long. Try a different click timing or a bigger safety margin.",
+        std::snprintf(buf, sizeof(buf), "Stuck at %.1f%% for too long. Try a different click timing or a bigger look-ahead.",
                       static_cast<double>(m_stats.bestPercent));
         m_msg = buf;
         return;
@@ -293,6 +403,13 @@ void Planner::expand() {
         // The saved run doesn't hold up any more (can happen if a checkpoint
         // wasn't perfect). Treat it like a dead end.
         if (!backtrack()) {
+            if (m_snaps.size() > 1) {  // try once more from the very start
+                pruneSnaps(0);
+                m_tl.clear();
+                m_front = Frontier{};
+                m_curValid = false;
+                return;
+            }
             m_phase = Phase::Failed;
             m_msg = "Got stuck right at the start.";
         }
@@ -315,48 +432,46 @@ void Planner::expand() {
     }
     if (r.kind == Run::Broken) return;
 
+    // Just pressed? If a short tap gets just as far, let go right away. That's
+    // how a person clicks, and it lets the planner save checkpoints again
+    // (holding forever works for the cube but leaves nothing to go back to).
+    if (f.fromToggle && !m_tl.empty() && m_tl.back().tick == f.tick && m_tl.back().down) {
+        int p = m_tl.back().player;
+        uint32_t rel = f.tick + 3;
+        uint32_t limit = r.kind == Run::Dead ? r.tick + 1 : f.tick + static_cast<uint32_t>(m_set.horizon);
+        if (rel < limit && gotoTick(rel)) {
+            RunResult r2 = runTo(rel, limit, {Toggle{rel, false, static_cast<uint8_t>(p)}}, false);
+            bool asFar = r2.kind == Run::Survived || r2.kind == Run::Won || (r.kind == Run::Dead && r2.kind == Run::Dead && r2.tick >= r.tick);
+            if (asFar) {
+                m_tl.push_back({rel, false, static_cast<uint8_t>(p)});
+                m_front = {rel, static_cast<uint8_t>(f.held & ~(1u << p)), true};
+                m_curValid = false;
+                return;
+            }
+        }
+    }
+
     uint32_t death = r.tick;
+    int who = m_lastWho;
     int64_t lo = i64(f.tick) + (f.fromToggle ? 1 : 0);
     lo = std::max<int64_t>(lo, i64(death) - m_set.maxWindow);
-    int64_t latest = -1;
-    for (int64_t t = death; t >= lo; t--) {
-        if (tryToggle(static_cast<uint32_t>(t), death)) {
-            latest = t;
-            break;
-        }
+
+    // the player who died first, then the other one (2-player levels)
+    int order[2] = {who, 1 - who};
+    int count = m_players > 1 ? 2 : 1;
+    if (count == 1) order[0] = 0;
+    for (int i = 0; i < count; i++)
+        if (searchWindow(order[i], death, lo)) return;
+    for (int i = 0; i < count; i++)
+        if (rescuePairs(order[i], death, lo)) return;
+    if (!backtrack()) {
+        if (thinkHarder()) return;
+        m_phase = Phase::Failed;
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "Couldn't find a way past %.1f%%. This part may be too tight.",
+                      static_cast<double>(m_stats.bestPercent));
+        m_msg = buf;
     }
-    if (latest < 0 && rescuePairs(death, lo)) return;
-    if (latest < 0) {
-        if (!backtrack()) {
-            m_phase = Phase::Failed;
-            char buf[160];
-            std::snprintf(buf, sizeof(buf), "Couldn't find a way past %.1f%%. The level may need a 2nd player or be too tight.",
-                          static_cast<double>(m_stats.bestPercent));
-            m_msg = buf;
-        }
-        return;
-    }
-    // Find the earliest timing that still works, without testing every tick:
-    // jump back 1, 2, 4, 8... ticks while it works, then narrow down.
-    int64_t good = latest, bad = lo - 1;
-    for (int64_t stepBack = 1; good - stepBack >= lo; stepBack *= 2) {
-        int64_t t = good - stepBack;
-        if (tryToggle(static_cast<uint32_t>(t), death)) {
-            good = t;
-        } else {
-            bad = t;
-            break;
-        }
-        if (latest - good > 160) break;
-    }
-    while (bad + 1 < good) {
-        int64_t mid = (bad + good) / 2;
-        if (tryToggle(static_cast<uint32_t>(mid), death)) good = mid;
-        else bad = mid;
-    }
-    std::vector<uint32_t> window;
-    for (int64_t t = good; t <= latest; t++) window.push_back(static_cast<uint32_t>(t));
-    pushChoice(window);
 }
 
 // ---------------------------------------------------------------------------
@@ -369,7 +484,7 @@ void Planner::beginVerify() {
     for (auto const& s : m_vSnaps) m_sim->drop(s.handle);
     m_vSnaps.clear();
     m_sim->restart();
-    m_sim->setButton(false);
+    applyHeld(0);
     m_sim->setRecording(true);
     m_vTick = 0;
     m_vEvent = 0;
@@ -377,10 +492,10 @@ void Planner::beginVerify() {
 }
 
 void Planner::verifyChunk(long long budget) {
-    bool held = m_vEvent > 0 ? m_tl[m_vEvent - 1].down : false;
+    uint8_t held = heldAt(m_vTick);
     uint32_t lastEvent = m_tl.empty() ? 0 : m_tl.back().tick;
     while (budget-- > 0) {
-        if (!held && (m_vTick % static_cast<uint32_t>(m_set.snapEvery * 2)) == 0) {
+        if (held == 0 && (m_vTick % static_cast<uint32_t>(m_set.snapEvery * 2)) == 0) {
             int h = m_sim->snapshot();
             if (h >= 0) m_vSnaps.push_back({m_vTick, h});
             if (static_cast<int>(m_vSnaps.size()) > m_set.maxSnaps) {
@@ -394,8 +509,10 @@ void Planner::verifyChunk(long long budget) {
             }
         }
         while (m_vEvent < m_tl.size() && m_tl[m_vEvent].tick == m_vTick) {
-            held = m_tl[m_vEvent].down;
-            m_sim->setButton(held);
+            Toggle const& e = m_tl[m_vEvent];
+            if (e.down) held = static_cast<uint8_t>(held | (1u << e.player));
+            else held = static_cast<uint8_t>(held & ~(1u << e.player));
+            m_sim->setButton(e.player, e.down);
             m_vEvent++;
         }
         StepResult r = step();
@@ -446,7 +563,7 @@ void Planner::verifyChunk(long long budget) {
                 m_exactBase = base;
             }
             m_choices.clear();
-            m_front = {base, false, false};
+            m_front = {base, heldAt(base), false};
             m_curValid = false;
             m_phase = Phase::Searching;
             m_msg = "Fixing a spot the double-check found...";

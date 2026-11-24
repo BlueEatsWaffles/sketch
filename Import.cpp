@@ -144,7 +144,7 @@ bool load(std::string const& path, std::string& summary, std::string& err) {
     }
     bot::loadImported(std::move(m));
 
-    // name it after the file, so "Save" keeps a Sketchbook copy
+    // name it after the file, so "Save" keeps a sketch copy
     std::string stem = util::pathStr(p.stem());
     if (stem.size() > 4 && lower(stem.substr(stem.size() - 4)) == ".gdr") stem.resize(stem.size() - 4);
     std::snprintf(cfg().macroName, sizeof(cfg().macroName), "%s", util::safeFileName(stem).c_str());

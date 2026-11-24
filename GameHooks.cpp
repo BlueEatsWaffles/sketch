@@ -9,6 +9,7 @@
 
 #include <Geode/Geode.hpp>
 #include <Geode/modify/GJBaseGameLayer.hpp>
+#include <Geode/modify/GameStatsManager.hpp>
 #include <Geode/modify/PlayLayer.hpp>
 #include <Geode/modify/PlayerObject.hpp>
 
@@ -25,6 +26,10 @@ class $modify(SKPlayLayer, PlayLayer) {
     }
 
     void resetLevel() {
+        if (predictor::restoring()) {  // Predict loading one of its checkpoints
+            PlayLayer::resetLevel();
+            return;
+        }
         PlayLayer::resetLevel();
         stats::onReset(this);
         hacks::onReset(this);
@@ -37,7 +42,7 @@ class $modify(SKPlayLayer, PlayLayer) {
         if (predictor::active()) {
             // The Predict bot is testing a run: just note the death.
             if (realHazard) {
-                predictor::onDeath();
+                predictor::onDeath(player);
                 return;
             }
             PlayLayer::destroyPlayer(player, object);
@@ -89,6 +94,12 @@ class $modify(SKPlayLayer, PlayLayer) {
         PlayLayer::playEndAnimationToPos(position);
     }
 
+    // Practice mode can place checkpoints by itself; not while Predict is using its own.
+    void storeCheckpoint(CheckpointObject* checkpoint) {
+        if (predictor::active()) return;
+        PlayLayer::storeCheckpoint(checkpoint);
+    }
+
     void delayedResetLevel() {
         // With a custom respawn time, we decide when to respawn (see hacks::engineTick).
         if (cfg().customRespawn && !hacks::g_ownRespawn) return;
@@ -112,7 +123,7 @@ class $modify(SKPlayLayer, PlayLayer) {
 
     void postUpdate(float dt) {
         PlayLayer::postUpdate(dt);
-        visuals::postUpdate(this, dt);
+        if (!predictor::active()) visuals::postUpdate(this, dt);
     }
 };
 
@@ -134,7 +145,9 @@ class $modify(SKGameLayer, GJBaseGameLayer) {
 
     void processCommands(float dt, bool isHalfTick, bool isLastTick) {
         if (predictor::active()) {  // no cheats or other bots while Predict thinks
+            predictor::tickBegin(this);
             GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
+            predictor::tickEnd(this);
             return;
         }
         bool inLevel = hacks::asPlay(this) != nullptr;
@@ -153,7 +166,8 @@ class $modify(SKGameLayer, GJBaseGameLayer) {
         // Predict: the bot runs the level itself, one tick at a time.
         if (predictor::active()) {
             if (auto pl = hacks::asPlay(this)) {
-                predictor::frame(pl, [this] { GJBaseGameLayer::update(1.f / 240.f); });
+                predictor::frame(pl, dt, [this](float d) { GJBaseGameLayer::update(d); });
+                visuals::postUpdate(pl, dt);  // hitboxes etc. once per frame, not every tick
                 return;
             }
         }
@@ -176,5 +190,13 @@ class $modify(SKPlayer, PlayerObject) {
     void playSpawnEffect() {
         if (cfg().noSpawnEffect || predictor::active()) return;
         PlayerObject::playSpawnEffect();
+    }
+};
+
+// The Predict bot tries thousands of times: none of that counts toward your stats.
+class $modify(SKStats, GameStatsManager) {
+    void incrementStat(char const* key, int amount) {
+        if (predictor::active()) return;
+        GameStatsManager::incrementStat(key, amount);
     }
 };

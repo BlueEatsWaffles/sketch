@@ -296,7 +296,7 @@ bool load(std::string const& name, std::string& err) {
     }
     uint32_t magic = 0, version = 0, n = 0;
     if (!rd(i, magic) || magic != kMagic || !rd(i, version) || version != kVersion) {
-        err = "This file is not a Sketchbook macro.";
+        err = "This file is not a sketch macro.";
         return false;
     }
     Macro m;

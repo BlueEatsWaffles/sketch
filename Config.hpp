@@ -213,6 +213,8 @@ struct MenuConfig {
     int rFpsIdx = 1;
     int rEncIdx = 0;
     int rQuality = 18;
+    int rRateMode = 0;          // 0 = quality number, 1 = bitrate
+    float rBitrate = 12.f;      // Mbps (megabits per second) when rRateMode = 1
     int rPresetIdx = 3;
     char rExtra[256] = "";
     bool rMusic = true;
