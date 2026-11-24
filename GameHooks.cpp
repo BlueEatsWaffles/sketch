@@ -2,6 +2,7 @@
 #include "Bot.hpp"
 #include "Config.hpp"
 #include "Hacks.hpp"
+#include "Predict.hpp"
 #include "Render.hpp"
 #include "Stats.hpp"
 #include "Visuals.hpp"
@@ -33,8 +34,18 @@ class $modify(SKPlayLayer, PlayLayer) {
 
     void destroyPlayer(PlayerObject* player, GameObject* object) {
         bool realHazard = object != m_anticheatSpike;
+        if (predictor::active()) {
+            // The Predict bot is testing a run: just note the death.
+            if (realHazard) {
+                predictor::onDeath();
+                return;
+            }
+            PlayLayer::destroyPlayer(player, object);
+            return;
+        }
         if (realHazard && player && hacks::noclipBlocks(this, player)) {
             stats::onNoclipHit(this);
+            visuals::addDeathMarker(this, player);
             return;
         }
         bool prevTest = m_isTestMode;
@@ -42,12 +53,17 @@ class $modify(SKPlayLayer, PlayLayer) {
         PlayLayer::destroyPlayer(player, object);
         m_isTestMode = prevTest;
         if (realHazard && player && player->m_isDead) {
+            visuals::addDeathMarker(this, player);
             stats::onDeath(this);
             hacks::onDeath(this);
         }
     }
 
     void levelComplete() {
+        if (predictor::active()) {
+            predictor::onWin();
+            return;
+        }
         bool prevTest = m_isTestMode;
         if (hacks::safeActive()) m_isTestMode = true;
         PlayLayer::levelComplete();
@@ -58,10 +74,19 @@ class $modify(SKPlayLayer, PlayLayer) {
     }
 
     void onQuit() {
+        predictor::onQuit();
         bot::onQuit();
         render::onQuit();
         saveConfigIfChanged();
         PlayLayer::onQuit();
+    }
+
+    void playEndAnimationToPos(CCPoint position) {
+        if (predictor::active()) {
+            predictor::onWin();
+            return;
+        }
+        PlayLayer::playEndAnimationToPos(position);
     }
 
     void delayedResetLevel() {
@@ -93,15 +118,25 @@ class $modify(SKPlayLayer, PlayLayer) {
 
 class $modify(SKGameLayer, GJBaseGameLayer) {
     void handleButton(bool down, int button, bool isPlayer1) {
-        if (!bot::injecting() && hacks::asPlay(this)) {
+        if (predictor::active() && !bot::injecting()) return;  // the Predict bot is driving
+        auto pl = hacks::asPlay(this);
+        if (!bot::injecting() && pl) {
             if (bot::blocksUser()) return;  // the macro is driving
             stats::onClick(down);
             bot::record(this, down, button, isPlayer1);
         }
         GJBaseGameLayer::handleButton(down, button, isPlayer1);
+        if (pl && !predictor::active()) {
+            stats::onButton(down, button, isPlayer1);
+            if (down) visuals::addClickMarker(pl, isPlayer1);
+        }
     }
 
     void processCommands(float dt, bool isHalfTick, bool isLastTick) {
+        if (predictor::active()) {  // no cheats or other bots while Predict thinks
+            GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
+            return;
+        }
         bool inLevel = hacks::asPlay(this) != nullptr;
         if (inLevel) {
             hacks::beforeTick(this);
@@ -115,6 +150,13 @@ class $modify(SKGameLayer, GJBaseGameLayer) {
     }
 
     void update(float dt) {
+        // Predict: the bot runs the level itself, one tick at a time.
+        if (predictor::active()) {
+            if (auto pl = hacks::asPlay(this)) {
+                predictor::frame(pl, [this] { GJBaseGameLayer::update(1.f / 240.f); });
+                return;
+            }
+        }
         // Frame stepper: the level is frozen until you press the step key.
         if (cfg().frameStepper && !render::active() && hacks::asPlay(this)) {
             if (!hacks::consumeStep()) return;
@@ -127,12 +169,12 @@ class $modify(SKGameLayer, GJBaseGameLayer) {
 
 class $modify(SKPlayer, PlayerObject) {
     void playDeathEffect() {
-        if (cfg().noDeathEffect) return;
+        if (cfg().noDeathEffect || predictor::active()) return;
         PlayerObject::playDeathEffect();
     }
 
     void playSpawnEffect() {
-        if (cfg().noSpawnEffect) return;
+        if (cfg().noSpawnEffect || predictor::active()) return;
         PlayerObject::playSpawnEffect();
     }
 };

@@ -36,6 +36,9 @@ inline float easeInOut(float t) {
 // Name for a key code (GD key codes match Windows virtual-key codes).
 std::string keyName(int key);
 
+// Key code for a name made by keyName() (-1 if unknown).
+int keyFromName(std::string const& name);
+
 // Seconds since program start (steady clock).
 double now();
 

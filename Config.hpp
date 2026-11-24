@@ -13,8 +13,12 @@ inline Col rgb(int r, int g, int b, float a = 1.f) {
     return Col{r / 255.f, g / 255.f, b / 255.f, a};
 }
 
+// Page patterns
+enum Pattern { PatNone = 0, PatRuled, PatGrid, PatDots, PatHatch, PatStars, PatScan, PatHalftone, PatCount };
+
 struct ThemeColors {
-    Col panel;       // notebook page
+    Col panel;       // notebook page (top)
+    Col panel2;      // notebook page (bottom) - same as panel = no gradient
     Col blob;        // the messy "paint" behind the page
     Col tab;         // side tabs
     Col tabActive;   // selected side tab
@@ -25,6 +29,9 @@ struct ThemeColors {
     Col accent;      // checkmarks, slider fill
     Col accentText;  // text drawn on top of accent
     Col field;       // boxes / inputs
+    Col pattern;     // color of the page pattern (alpha = how strong)
+    int patternKind = PatNone;
+    bool glow = false;  // neon glow around lines
 };
 
 // The default look, taken from your drawing: grey page, light grey tabs,
@@ -32,6 +39,7 @@ struct ThemeColors {
 inline ThemeColors sketchColors() {
     ThemeColors t;
     t.panel = rgb(99, 99, 99);
+    t.panel2 = rgb(92, 92, 92);
     t.blob = rgb(99, 99, 99);
     t.tab = rgb(190, 191, 186);
     t.tabActive = rgb(229, 230, 224);
@@ -42,6 +50,9 @@ inline ThemeColors sketchColors() {
     t.accent = rgb(255, 255, 255);
     t.accentText = rgb(28, 28, 28);
     t.field = rgb(82, 82, 82);
+    t.pattern = rgb(0, 0, 0, 0.10f);
+    t.patternKind = PatNone;
+    t.glow = false;
     return t;
 }
 
@@ -53,8 +64,15 @@ struct MenuConfig {
     int themeIndex = 0;
     int fontIndex = 1;
     bool sketchy = true;
+    float sketchAmount = 1.0f;  // how wobbly the pencil lines are
+    bool doubleLines = true;    // draw lines twice, like a pencil sketch
     bool lineBoil = false;
     bool paintBlob = true;
+    bool pencilShading = true;  // pencil hatching on the paint blob
+    bool tape = true;           // tape on the page corners
+    bool doodles = true;        // little doodles in the corners
+    float bounce = 1.0f;        // how bouncy the animations are
+    bool cascade = true;        // rows slide in one after another
     float outline = 3.0f;
     float rounding = 6.0f;
     bool softCursor = true;
@@ -67,9 +85,22 @@ struct MenuConfig {
     bool blockInputOnPlay = true;
     bool autoStopAtEnd = true;
     char macroName[64] = "my-macro";
+    int importOffset = 0;        // move imported clicks earlier/later (ticks)
+    char importDir[512] = "";    // extra folder to look for other bots' macros
+    char importSearch[64] = "";
     bool frameStepper = false;
     int stepKey = 'C';
     int stepToggleKey = -1;
+
+    // ---- predict (the bot that beats levels by itself) ---------------------
+    int predictTiming = 1;       // 0 early, 1 normal, 2 late
+    int predictMargin = 24;      // safety margin after a click (ticks)
+    int predictBudget = 14;      // thinking time per frame (ms)
+    bool predictVerify = true;   // double-check from the start
+    bool predictShow = true;     // show the bot's progress in the level
+    int predictFormat = 0;       // 0 = .gdr (other bots), 1 = .skm (this menu)
+    char predictDir[512] = "";   // "save to folder"
+    char predictName[128] = "";
 
     // ---- player -----------------------------------------------------------
     bool noclip = false;
@@ -97,7 +128,10 @@ struct MenuConfig {
     bool hitboxOnDeath = false;
     bool hitboxTrail = false;
     int trailLen = 60;
-    bool hitBorders = true;
+    bool hitBorders = false;
+    int hitBordersKey = -1;
+    bool hbRainbow = false;
+    bool hbOnlyPlayer = false;
     float borderWidth = 0.6f;
     bool hbFill = false;
     float hbFillAlpha = 0.25f;
@@ -118,6 +152,8 @@ struct MenuConfig {
     bool hideProgress = false;
     bool accuratePercent = false;
     int percentDecimals = 2;
+    bool deathMarkers = false;
+    bool clickMarkers = false;
 
     // ---- speed ------------------------------------------------------------
     bool speedhack = false;
@@ -128,6 +164,9 @@ struct MenuConfig {
     bool fpsBypass = false;
     float fpsValue = 240.f;
     bool lockDelta = false;
+    bool slowmo = false;        // hold a key for slow motion
+    int slowmoKey = 0x10;       // Shift
+    float slowmoSpeed = 0.3f;
 
     // ---- labels -----------------------------------------------------------
     bool lblFps = true;
@@ -143,6 +182,12 @@ struct MenuConfig {
     bool lblBot = true;
     bool lblCheat = true;
     bool lblSpeed = true;
+    bool lblLevel = false;
+    bool lblDeaths = false;
+    bool lblSession = false;
+    bool fpsGraph = false;
+    bool inputDisplay = false;
+    float inputScale = 1.0f;
     int lblCorner = 0;
     float lblScale = 1.f;
     float lblAlpha = 0.9f;
@@ -152,6 +197,8 @@ struct MenuConfig {
     bool unlockAll = false;
     int restartKey = 'R';
     int practiceKey = -1;
+    int screenshotKey = 0x78;   // F9
+    bool muteUnfocused = false;
 
     // ---- render (video maker) --------------------------------------------
     int rEngine = 0;          // 0 = FFmpeg (best, needs install), 1 = built-in (fast, worse)
@@ -173,6 +220,7 @@ struct MenuConfig {
     float rEndPad = 3.f;
     bool rRestart = true;
     bool rAutoWithBot = false;
+    bool rCloseMenu = true;   // close the menu when a video starts
 };
 
 MenuConfig& cfg();

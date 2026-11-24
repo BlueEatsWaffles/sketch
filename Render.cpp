@@ -1,7 +1,11 @@
 #include "Render.hpp"
 #include "Builtin.hpp"
 #include "Config.hpp"
+#include "Gui.hpp"
+#include "Hacks.hpp"
 #include "Overlay.hpp"
+#include "Png.hpp"
+#include "Predict.hpp"
 #include "Util.hpp"
 
 #include <cstdio>
@@ -396,6 +400,10 @@ bool startBuiltin() {
 
 bool start(PlayLayer* pl, bool restartLevel) {
     if (g.active) return true;
+    if (predictor::active()) {
+        overlay::toast("Wait for Predict to finish first.", overlay::Warn);
+        return false;
+    }
     if (!pl) {
         overlay::toast("Open a level first, then press Start.", overlay::Warn);
         return false;
@@ -457,7 +465,8 @@ bool start(PlayLayer* pl, bool restartLevel) {
     if (eng == FFmpeg) overlay::toast("Rendering with FFmpeg... the game will look slow, that's normal!", overlay::Info);
     else if (g.realtime) overlay::toast("Recording with the built-in renderer. Play normally!", overlay::Info);
     else overlay::toast("Rendering with the built-in renderer... the game will look slow.", overlay::Info);
-    if (restartLevel) pl->resetLevelFromStart();
+    if (c.rCloseMenu && gui::isOpen()) gui::toggle();
+    if (restartLevel) hacks::restartFromStart(pl);
     return true;
 }
 
@@ -584,6 +593,39 @@ void stop(bool keep) {
         std::filesystem::rename(tmpP, finP, ec);
         overlay::toast("Video saved: " + util::pathStr(finP.filename()), overlay::Good);
     }).detach();
+}
+
+bool screenshot(std::string& savedPath) {
+    auto scene = CCDirector::sharedDirector()->getRunningScene();
+    if (!scene) return false;
+    auto ws = CCDirector::sharedDirector()->getWinSize();
+    auto rt = CCRenderTexture::create(static_cast<int>(ws.width), static_cast<int>(ws.height));
+    if (!rt) return false;
+    auto px = rt->getSprite()->getTexture()->getContentSizeInPixels();
+    int w = static_cast<int>(px.width), h = static_cast<int>(px.height);
+    std::vector<uint8_t> buf(static_cast<size_t>(w) * static_cast<size_t>(h) * 3u);
+    rt->beginWithClear(0.f, 0.f, 0.f, 1.f);
+    scene->visit();
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, buf.data());
+    rt->end();
+
+    auto bytes = png::encodeRgb(buf.data(), w, h, true);
+    std::error_code ec;
+    auto dir = Mod::get()->getSaveDir() / "screenshots";
+    std::filesystem::create_directories(dir, ec);
+    std::string name = "menu";
+    if (auto pl = GameManager::sharedState()->m_playLayer; pl && pl->m_level) name = pl->m_level->m_levelName.c_str();
+    std::time_t tt = std::time(nullptr);
+    std::tm tmv = util::localTime(tt);
+    char ts[32];
+    std::strftime(ts, sizeof(ts), "%Y-%m-%d_%H-%M-%S", &tmv);
+    auto path = dir / util::u8path(util::safeFileName(name) + "_" + ts + ".png");
+    std::ofstream o(path, std::ios::binary | std::ios::trunc);
+    if (!o) return false;
+    o.write(reinterpret_cast<char const*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    savedPath = util::pathStr(path);
+    return static_cast<bool>(o);
 }
 
 void onLevelComplete() {

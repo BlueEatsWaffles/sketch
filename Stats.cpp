@@ -16,6 +16,12 @@ int g_noclipDeaths = 0;
 uint32_t g_lastTick = 0xFFFFFFFFu;
 uint32_t g_lastHit = 0xFFFFFFFFu;
 std::deque<double> g_clickTimes;
+bool g_held[2] = {false, false};
+bool g_usedP2 = false;
+int g_sessionDeaths = 0;
+double g_enterTime = 0.0;
+float g_frames[120] = {};
+int g_frameCount = 0, g_frameStart = 0;
 int g_clicks = 0;
 float g_flash = 0.f;
 }  // namespace
@@ -23,6 +29,10 @@ float g_flash = 0.f;
 void onLevelEnter() {
     g_attempts = 0;
     g_best = 0.f;
+    g_sessionDeaths = 0;
+    g_usedP2 = false;
+    g_held[0] = g_held[1] = false;
+    g_enterTime = util::now();
 }
 
 void onReset(PlayLayer*) {
@@ -33,6 +43,7 @@ void onReset(PlayLayer*) {
     g_lastTick = 0xFFFFFFFFu;
     g_lastHit = 0xFFFFFFFFu;
     g_clicks = 0;
+    g_held[0] = g_held[1] = false;
 }
 
 void onNoclipHit(PlayLayer* pl) {
@@ -46,7 +57,25 @@ void onNoclipHit(PlayLayer* pl) {
     g_hitTicks++;
 }
 
+void onButton(bool down, int button, bool p1) {
+    if (button != 1) return;
+    g_held[p1 ? 0 : 1] = down;
+    if (!p1) g_usedP2 = true;
+}
+
+bool held(int player) { return g_held[player ? 1 : 0]; }
+bool usedP2() { return g_usedP2; }
+int sessionDeaths() { return g_sessionDeaths; }
+double sessionTime() { return g_enterTime > 0.0 ? util::now() - g_enterTime : 0.0; }
+
+float const* frameTimes(int& count, int& start) {
+    count = g_frameCount;
+    start = g_frameStart;
+    return g_frames;
+}
+
 void onDeath(PlayLayer* pl) {
+    g_sessionDeaths++;
     if (!pl->m_isPlatformer) g_best = util::maxv(g_best, pl->getCurrentPercent());
 }
 
@@ -67,6 +96,11 @@ void afterTick(GJBaseGameLayer* g) {
 }
 
 void update(float dt) {
+    // frame time history for the FPS graph
+    int idx = (g_frameStart + g_frameCount) % 120;
+    g_frames[idx] = dt * 1000.f;
+    if (g_frameCount < 120) g_frameCount++;
+    else g_frameStart = (g_frameStart + 1) % 120;
     double t = util::now();
     while (!g_clickTimes.empty() && t - g_clickTimes.front() > 1.0) g_clickTimes.pop_front();
     g_flash = util::maxv(0.f, g_flash - dt * 2.5f);

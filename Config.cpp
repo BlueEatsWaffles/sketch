@@ -31,39 +31,48 @@ void visitTheme(std::string const& p, ThemeColors& t, V& v) {
     v(p + "accent", t.accent);
     v(p + "accentText", t.accentText);
     v(p + "field", t.field);
+    v(p + "panel2", t.panel2);
+    v(p + "pattern", t.pattern);
+    v(p + "patternKind", t.patternKind);
+    v(p + "glow", t.glow);
 }
 
 template <class V>
 void visitAll(MenuConfig& c, V& v) {
 #define F(x) v(std::string(#x), c.x)
     // menu
-    F(menuKey); F(uiScale); F(animSpeed); F(themeIndex); F(fontIndex); F(sketchy); F(lineBoil);
-    F(paintBlob); F(outline); F(rounding); F(softCursor); F(toasts);
+    F(menuKey); F(uiScale); F(animSpeed); F(themeIndex); F(fontIndex); F(sketchy); F(sketchAmount); F(doubleLines); F(lineBoil);
+    F(paintBlob); F(pencilShading); F(tape); F(doodles); F(bounce); F(cascade); F(outline); F(rounding); F(softCursor); F(toasts);
     // bot
-    F(botMode); F(fixInterval); F(blockInputOnPlay); F(autoStopAtEnd); F(macroName); F(frameStepper);
+    F(botMode); F(fixInterval); F(blockInputOnPlay); F(autoStopAtEnd); F(macroName); F(importOffset); F(importDir); F(frameStepper);
     F(stepKey); F(stepToggleKey);
+    // predict
+    F(predictTiming); F(predictMargin); F(predictBudget); F(predictVerify); F(predictShow); F(predictFormat);
+    F(predictDir);
     // player
     F(noclip); F(noclipP1); F(noclipP2); F(deathFlash); F(noclipKey); F(safeMode); F(autoSafe);
     F(customRespawn); F(respawnDelay); F(jumpHack); F(autoclicker); F(acHold); F(acRelease); F(acP2);
     F(noDeathEffect); F(noSpawnEffect); F(hidePlayer); F(noUnfocusPause); F(noNewBest);
     // visual
-    F(hitboxes); F(hitboxOnDeath); F(hitboxTrail); F(trailLen); F(hitBorders); F(borderWidth); F(hbFill);
+    F(hitboxes); F(hitboxOnDeath); F(hitboxTrail); F(trailLen); F(hitBorders); F(hitBordersKey); F(hbRainbow); F(hbOnlyPlayer); F(borderWidth); F(hbFill);
     F(hbFillAlpha); F(hbHazard); F(hbSolid); F(hbSpecial); F(hbOther); F(hbPlayer); F(playerBox);
     F(rainbow); F(rainbowSpeed); F(rainbowTrail); F(noWaveTrail); F(solidWave); F(noTrail);
     F(hideAttempts); F(hidePercent); F(hideProgress); F(accuratePercent); F(percentDecimals);
+    F(deathMarkers); F(clickMarkers);
     // speed
     F(speedhack); F(speed); F(speedAudio); F(speedOnlyInLevel); F(speedKey); F(fpsBypass); F(fpsValue);
-    F(lockDelta);
+    F(lockDelta); F(slowmo); F(slowmoKey); F(slowmoSpeed);
     // labels
     F(lblFps); F(lblCps); F(lblNoclipAcc); F(lblNoclipDeaths); F(lblAttempts); F(lblBest); F(lblClock);
-    F(lblTime); F(lblJumps); F(lblPlayer); F(lblBot); F(lblCheat); F(lblSpeed); F(lblCorner);
+    F(lblTime); F(lblJumps); F(lblPlayer); F(lblBot); F(lblCheat); F(lblSpeed); F(lblCorner); F(lblLevel); F(lblDeaths); F(lblSession);
+    F(fpsGraph); F(inputDisplay); F(inputScale);
     F(lblScale); F(lblAlpha);
     // extra
-    F(noTransition); F(unlockAll); F(restartKey); F(practiceKey);
+    F(noTransition); F(unlockAll); F(restartKey); F(practiceKey); F(screenshotKey); F(muteUnfocused);
     // render
     F(rEngine); F(rBQuality); F(rBFpsIdx); F(rBRealtime);
     F(ffmpegPath); F(renderDir); F(rResIdx); F(rW); F(rH); F(rFpsIdx); F(rEncIdx); F(rQuality);
-    F(rPresetIdx); F(rExtra); F(rMusic); F(rMusicOffset); F(rEndPad); F(rRestart); F(rAutoWithBot);
+    F(rPresetIdx); F(rExtra); F(rMusic); F(rMusicOffset); F(rEndPad); F(rRestart); F(rAutoWithBot); F(rCloseMenu);
 #undef F
     visitTheme("custom.", c.custom, v);
 }
@@ -171,6 +180,16 @@ void sanitize(MenuConfig& c) {
     c.rQuality = clamp(c.rQuality, 0, 51);
     c.respawnDelay = clamp(c.respawnDelay, 0.f, 5.f);
     c.rEngine = clamp(c.rEngine, 0, 1);
+    c.importOffset = clamp(c.importOffset, -20, 20);
+    c.predictTiming = clamp(c.predictTiming, 0, 2);
+    c.predictMargin = clamp(c.predictMargin, 4, 120);
+    c.predictBudget = clamp(c.predictBudget, 4, 60);
+    c.predictFormat = clamp(c.predictFormat, 0, 1);
+    c.sketchAmount = clamp(c.sketchAmount, 0.f, 2.5f);
+    c.bounce = clamp(c.bounce, 0.f, 2.f);
+    c.slowmoSpeed = clamp(c.slowmoSpeed, 0.05f, 1.f);
+    c.inputScale = clamp(c.inputScale, 0.5f, 2.5f);
+    c.custom.patternKind = clamp(c.custom.patternKind, 0, static_cast<int>(PatCount) - 1);
     c.rBQuality = clamp(c.rBQuality, 0, 2);
     c.rBFpsIdx = clamp(c.rBFpsIdx, 0, 1);
     c.rResIdx = clamp(c.rResIdx, 0, 4);

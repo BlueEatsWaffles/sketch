@@ -12,6 +12,8 @@ struct Preset {
     ThemeColors c;
 };
 
+extern char const* const kPatternNames[PatCount];  // names of the page patterns
+
 std::vector<Preset> const& presets();
 int customIndex();                // index of the "Custom" theme
 char const* nameOf(int index);

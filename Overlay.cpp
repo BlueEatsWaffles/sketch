@@ -1,5 +1,6 @@
 #include "Overlay.hpp"
 #include "Bot.hpp"
+#include "Predict.hpp"
 #include "Config.hpp"
 #include "Hacks.hpp"
 #include "Render.hpp"
@@ -86,6 +87,20 @@ void drawLabels(ImDrawList* dl, PlayLayer* pl, ImVec2 o, ImVec2 sz) {
         std::snprintf(b, sizeof(b), "Noclip deaths: %d", stats::noclipDeaths());
         lines.emplace_back(b);
     }
+    if (c.lblLevel && pl->m_level) {
+        std::snprintf(b, sizeof(b), "%s", pl->m_level->m_levelName.c_str());
+        lines.emplace_back(b);
+    }
+    if (c.lblDeaths) {
+        std::snprintf(b, sizeof(b), "Deaths: %d", stats::sessionDeaths());
+        lines.emplace_back(b);
+    }
+    if (c.lblSession) {
+        double t = stats::sessionTime();
+        int m = static_cast<int>(t / 60.0);
+        std::snprintf(b, sizeof(b), "Session: %d:%02d", m, static_cast<int>(t - m * 60.0));
+        lines.emplace_back(b);
+    }
     if (c.lblAttempts) {
         std::snprintf(b, sizeof(b), "Attempt %d", stats::attempts());
         lines.emplace_back(b);
@@ -168,6 +183,87 @@ void drawLabels(ImDrawList* dl, PlayLayer* pl, ImVec2 o, ImVec2 sz) {
         outlinedText(dl, ImVec2(x, y), size, white, black, l.c_str());
         y += size + gap;
     }
+
+    // FPS graph: a little line of how long each frame took
+    if (c.fpsGraph) {
+        float gw = 170.f * c.lblScale, gh = 42.f * c.lblScale;
+        float gx = right ? (o.x + sz.x - margin - gw) : (o.x + margin);
+        float gy = bottom ? (o.y + sz.y - margin - total - gh - gap) : y + gap;
+        dl->AddRectFilled(ImVec2(gx, gy), ImVec2(gx + gw, gy + gh), IM_COL32(0, 0, 0, static_cast<int>(120 * c.lblAlpha)), 6.f);
+        int fcount = 0, fstart = 0;
+        float const* ft = stats::frameTimes(fcount, fstart);
+        if (fcount > 1) {
+            ImVec2 pts[120];
+            for (int i = 0; i < fcount; i++) {
+                float ms = ft[(fstart + i) % 120];
+                float f = util::clamp(ms / 34.f, 0.f, 1.f);
+                pts[i] = ImVec2(gx + gw * static_cast<float>(i) / 119.f, gy + gh - 3.f - f * (gh - 6.f));
+            }
+            dl->AddPolyline(pts, fcount, IM_COL32(120, 255, 160, static_cast<int>(255 * c.lblAlpha)), 0, 1.6f);
+        }
+        float line60 = gy + gh - 3.f - (16.7f / 34.f) * (gh - 6.f);
+        dl->AddLine(ImVec2(gx, line60), ImVec2(gx + gw, line60), IM_COL32(255, 255, 255, static_cast<int>(60 * c.lblAlpha)), 1.f);
+        dl->AddRect(ImVec2(gx, gy), ImVec2(gx + gw, gy + gh), black, 6.f, 0, 1.5f);
+    }
+}
+
+// Two boxes that light up while you hold the button (great for showcases).
+void drawInputs(ImDrawList* dl, ImVec2 o, ImVec2 sz) {
+    auto const& c = cfg();
+    if (!c.inputDisplay) return;
+    auto const& t = theme::live();
+    float k = c.inputScale;
+    float bw = 62.f * k, bh = 46.f * k, gap = 10.f * k, margin = 14.f;
+    bool showP2 = stats::usedP2();
+    int n = showP2 ? 2 : 1;
+    // bottom left (popups use the bottom right); bottom middle if the labels are already bottom left
+    float total = bw * n + gap * static_cast<float>(n - 1);
+    float x0 = c.lblCorner == 2 ? (o.x + (sz.x - total) * 0.5f) : (o.x + margin);
+    float y0 = o.y + sz.y - margin - bh - 6.f;
+    for (int i = 0; i < n; i++) {
+        bool h = stats::held(i);
+        float p = ui::spring(0x1A9B00u + static_cast<ImGuiID>(i), h ? 1.f : 0.f, 420.f, 15.f);
+        float squish = 1.f - 0.10f * p;
+        float cx = x0 + bw * 0.5f + static_cast<float>(i) * (bw + gap), cy = y0 + bh * 0.5f + 3.f * k * p;
+        ImVec2 a(cx - bw * 0.5f * (2.f - squish), cy - bh * 0.5f * squish), b(cx + bw * 0.5f * (2.f - squish), cy + bh * 0.5f * squish);
+        dl->AddRectFilled(ImVec2(a.x + 3.f * k, a.y + 4.f * k * (1.f - p)), ImVec2(b.x + 3.f * k, b.y + 4.f * k * (1.f - p)),
+                          theme::col(t.outline, 0.5f), 7.f * k);
+        dl->AddRectFilled(a, b, theme::col(theme::mix(t.panel, t.accent, util::clamp(p, 0.f, 1.f))), 7.f * k);
+        ui::sketchRect(dl, a, b, theme::col(t.outline), 2.5f * k, 7.f * k, 0xC11Cu + static_cast<uint32_t>(i));
+        char const* label = i == 0 ? "P1" : "P2";
+        ImVec2 ts = ui::textSize(label, nullptr, 18.f * k);
+        ui::text(dl, ImVec2(cx - ts.x * 0.5f, cy - ts.y * 0.5f), theme::col(theme::mix(t.text, t.accentText, util::clamp(p, 0.f, 1.f))),
+                 label, nullptr, 18.f * k);
+    }
+}
+
+// The "Predict is thinking" card at the top of the screen.
+void drawPredict(ImDrawList* dl, ImVec2 o, ImVec2 sz) {
+    if (!predictor::active()) return;
+    auto const& t = theme::live();
+    auto st = predictor::stats();
+    float w = util::minv(520.f, sz.x - 40.f), h = 96.f;
+    ImVec2 a(o.x + (sz.x - w) * 0.5f, o.y + 18.f), b(a.x + w, a.y + h);
+    dl->AddRectFilled(ImVec2(a.x + 4, a.y + 6), ImVec2(b.x + 4, b.y + 6), theme::col(t.outline, 0.45f), 12.f);
+    dl->AddRectFilled(a, b, theme::col(t.panel, 0.96f), 12.f);
+    ui::sketchRect(dl, a, b, theme::col(t.outline), 3.f, 12.f, 0x9AED1C7u);
+    float time = static_cast<float>(ImGui::GetTime());
+    bool checking = predictor::phase() == predict::Phase::Verifying;
+    std::string title = checking ? "Predict: double-checking" : "Predict is thinking";
+    int dots = static_cast<int>(time * 3.f) % 4;
+    title.append(static_cast<size_t>(dots), '.');
+    ui::text(dl, ImVec2(a.x + 18, a.y + 10), theme::col(t.text), title.c_str(), nullptr, 20.f);
+    // progress bar with a bouncy fill
+    float pct = predictor::percentDone() / 100.f;
+    float shown = util::clamp(ui::spring(0x9AED1C8u, pct, 120.f, 11.f), 0.f, 1.f);
+    ImVec2 p0(a.x + 18, a.y + 40), p1(b.x - 18, a.y + 60);
+    dl->AddRectFilled(p0, p1, theme::col(t.field), 6.f);
+    if (shown > 0.005f) dl->AddRectFilled(p0, ImVec2(p0.x + (p1.x - p0.x) * shown, p1.y), theme::col(t.accent), 6.f);
+    ui::sketchRect(dl, p0, p1, theme::col(t.outline), 2.f, 6.f, 0x9AED1C9u);
+    char buf[200];
+    std::snprintf(buf, sizeof(buf), "%.1f%%   -   %lld clicks planned   -   %lld backtracks   -   %.0fs",
+                  static_cast<double>(predictor::percentDone()), st.decisions, st.backtracks, predictor::elapsed());
+    ui::text(dl, ImVec2(a.x + 18, a.y + 68), theme::col(t.textDim), buf, nullptr, 15.f);
 }
 
 void drawRenderBadge(ImDrawList* dl, ImVec2 o, ImVec2 sz) {
@@ -256,6 +352,8 @@ void draw(float dt) {
     if (auto pl = hacks::playLayer()) {
         drawFlash(dl, o, sz);
         drawLabels(dl, pl, o, sz);
+        drawInputs(dl, o, sz);
+        drawPredict(dl, o, sz);
     }
     drawRenderBadge(dl, o, sz);
     drawToasts(dl, dt, o, sz);

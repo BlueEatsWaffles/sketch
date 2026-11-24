@@ -19,6 +19,11 @@ bool consumeStep();
 
 void engineTick(float realDt);   // every frame from CCScheduler::update
 void requestFontReload();
+void setSlowHeld(bool held);
+float speedFactor(bool inLevel);  // speedhack x slow-motion
+
+// Restart from the very start, closing the pause menu if it's open.
+void restartFromStart(PlayLayer* pl);
 
 PlayLayer* playLayer();
 PlayLayer* asPlay(GJBaseGameLayer* g);

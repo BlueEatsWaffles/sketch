@@ -1,5 +1,6 @@
 #include "Bot.hpp"
 #include "Config.hpp"
+#include "Hacks.hpp"
 #include "Overlay.hpp"
 #include "Render.hpp"
 #include "Util.hpp"
@@ -95,7 +96,7 @@ void startRecord() {
     g_state = State::Record;
     if (auto pl = currentPlayLayer()) {
         if (pl->m_level) g_macro.level = pl->m_level->m_levelName.c_str();
-        pl->resetLevelFromStart();
+        hacks::restartFromStart(pl);
         overlay::toast("Recording! Play the level, then save it in the Bot tab.", overlay::Good);
     } else {
         overlay::toast("Recording will start when you enter a level.", overlay::Info);
@@ -111,7 +112,7 @@ void startPlay() {
     g_idx = 0;
     g_fixIdx = 0;
     if (auto pl = currentPlayLayer()) {
-        pl->resetLevelFromStart();
+        hacks::restartFromStart(pl);
         if (cfg().rAutoWithBot) render::start(pl, false);
         overlay::toast("Playing macro", overlay::Good);
     } else {
@@ -247,12 +248,9 @@ std::vector<std::string> list() {
     return out;
 }
 
-bool save(std::string const& name, std::string& err) {
-    if (g_macro.inputs.empty() && g_macro.fixes.empty()) {
-        err = "Nothing to save yet - record something first.";
-        return false;
-    }
-    auto path = folder() / util::u8path(util::safeFileName(name) + ".skm");
+bool writeFile(std::filesystem::path const& path, Macro const& m, std::string& err) {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
     std::ofstream o(path, std::ios::binary | std::ios::trunc);
     if (!o) {
         err = "Could not write the file.";
@@ -260,24 +258,33 @@ bool save(std::string const& name, std::string& err) {
     }
     wr(o, kMagic);
     wr(o, kVersion);
-    uint32_t n = static_cast<uint32_t>(g_macro.level.size());
+    uint32_t n = static_cast<uint32_t>(m.level.size());
     wr(o, n);
-    o.write(g_macro.level.data(), n);
-    wr(o, static_cast<uint32_t>(g_macro.inputs.size()));
-    for (auto const& i : g_macro.inputs) {
+    o.write(m.level.data(), n);
+    wr(o, static_cast<uint32_t>(m.inputs.size()));
+    for (auto const& i : m.inputs) {
         wr(o, i.frame);
         wr(o, i.button);
         wr(o, static_cast<uint8_t>(i.down));
         wr(o, static_cast<uint8_t>(i.p1));
     }
-    wr(o, static_cast<uint32_t>(g_macro.fixes.size()));
-    for (auto const& x : g_macro.fixes) {
+    wr(o, static_cast<uint32_t>(m.fixes.size()));
+    for (auto const& x : m.fixes) {
         wr(o, x.frame);
         wr(o, static_cast<uint8_t>(x.dual));
         wrState(o, x.a);
         wrState(o, x.b);
     }
+    if (!o) err = "Could not write the file.";
     return static_cast<bool>(o);
+}
+
+bool save(std::string const& name, std::string& err) {
+    if (g_macro.inputs.empty() && g_macro.fixes.empty()) {
+        err = "Nothing to save yet - record something first.";
+        return false;
+    }
+    return writeFile(folder() / util::u8path(util::safeFileName(name) + ".skm"), g_macro, err);
 }
 
 bool load(std::string const& name, std::string& err) {
@@ -330,6 +337,12 @@ bool load(std::string const& name, std::string& err) {
     g_state = State::Idle;
     g_idx = g_fixIdx = 0;
     return true;
+}
+
+void loadImported(Macro m) {
+    g_macro = std::move(m);
+    g_state = State::Idle;
+    g_idx = g_fixIdx = 0;
 }
 
 bool remove(std::string const& name) {

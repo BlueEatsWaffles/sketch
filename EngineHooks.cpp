@@ -4,6 +4,7 @@
 #include "Gui.hpp"
 #include "Hacks.hpp"
 #include "Overlay.hpp"
+#include "Predict.hpp"
 #include "Render.hpp"
 #include "Ui.hpp"
 #include "Util.hpp"
@@ -35,7 +36,7 @@ class $modify(SKScheduler, CCScheduler) {
             dt = 1.f / static_cast<float>(render::fps());
         } else {
             if (c.lockDelta && inLevel) dt = static_cast<float>(CCDirector::sharedDirector()->getAnimationInterval());
-            if (c.speedhack && (!c.speedOnlyInLevel || inLevel)) dt *= util::clamp(c.speed, 0.01f, 100.f);
+            dt *= hacks::speedFactor(inLevel);
         }
 
         hacks::engineTick(realDt);
@@ -70,6 +71,7 @@ bool handleKey(int key, bool down, bool repeat) {
 
     // typing in a text box: let ImGui have the keys
     if (ImGui::GetCurrentContext() && ImGui::GetIO().WantTextInput) return false;
+    if (key == c.slowmoKey && !repeat) hacks::setSlowHeld(down);  // hold to slow down
     if (!down) return false;
 
     if (key == c.menuKey && !repeat) {
@@ -77,8 +79,22 @@ bool handleKey(int key, bool down, bool repeat) {
         return true;
     }
 
+    if (key == c.screenshotKey && !repeat) {
+        std::string path;
+        if (render::screenshot(path)) overlay::toast("Screenshot saved", overlay::Good);
+        else overlay::toast("Couldn't take a screenshot", overlay::Bad);
+        return true;
+    }
+
     auto pl = hacks::playLayer();
     if (!pl) return false;
+    if (predictor::active()) return false;  // the Predict bot is busy - no hotkeys
+
+    if (key == c.hitBordersKey && !repeat) {
+        c.hitBorders = !c.hitBorders;
+        overlay::toast(c.hitBorders ? "Hit borders ON" : "Hit borders OFF");
+        return true;
+    }
 
     if (c.frameStepper && key == c.stepKey) {
         hacks::requestStep();  // holding the key keeps stepping (key repeat)

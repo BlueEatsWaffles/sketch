@@ -46,6 +46,12 @@ std::string keyName(int k) {
     return "Key " + std::to_string(k);
 }
 
+int keyFromName(std::string const& name) {
+    for (int k = 0; k < 256; k++)
+        if (keyName(k) == name) return k;
+    return -1;
+}
+
 double now() {
     using namespace std::chrono;
     static auto const start = steady_clock::now();

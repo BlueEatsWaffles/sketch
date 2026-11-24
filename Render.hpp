@@ -52,6 +52,7 @@ bool start(PlayLayer* pl, bool restartLevel);
 void stop(bool keep);
 void capture(float realDt);   // called once per frame while active
 void onLevelComplete();
+bool screenshot(std::string& savedPath);  // saves a PNG of the game (no menu) to <mod folder>/screenshots
 void onQuit();
 
 }  // namespace render

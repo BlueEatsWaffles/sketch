@@ -5,7 +5,41 @@
 	},
 	"id": "sketchbook.sketchbook-menu",
 	"name": "Sketchbook Menu",
-	"version": "v1.0.0",
+	"version": "v1.1.0",
 	"developer": "Sketchbook",
-	"description": "A notebook-style mod menu: macro bot, replay bot, speedhack, video renderer, hitboxes, hit borders, themes and 40+ more features."
+	"description": "A notebook-style mod menu: macro bot, replay bot, speedhack, video renderer, hitboxes, hit borders, themes and 40+ more features.",
+	"settings": {
+		"menu-key": {
+			"type": "string",
+			"name": "Menu key",
+			"description": "The key that opens and closes Sketchbook Menu. Inside the menu (Extra tab) you can pick any key you want.",
+			"default": "Tab",
+			"one-of": [
+				"Tab",
+				"`",
+				"Insert",
+				"Home",
+				"End",
+				"Delete",
+				"PgUp",
+				"PgDn",
+				"F1",
+				"F2",
+				"F3",
+				"F4",
+				"F5",
+				"F6",
+				"F7",
+				"F8",
+				"F9",
+				"F10",
+				"F11",
+				"F12",
+				"B",
+				"M",
+				"Q",
+				"Y"
+			]
+		}
+	}
 }
