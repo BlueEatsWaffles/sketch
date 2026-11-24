@@ -1,0 +1,138 @@
+// Hooks into the level itself: PlayLayer, the shared game layer and the player.
+#include "Bot.hpp"
+#include "Config.hpp"
+#include "Hacks.hpp"
+#include "Render.hpp"
+#include "Stats.hpp"
+#include "Visuals.hpp"
+
+#include <Geode/Geode.hpp>
+#include <Geode/modify/GJBaseGameLayer.hpp>
+#include <Geode/modify/PlayLayer.hpp>
+#include <Geode/modify/PlayerObject.hpp>
+
+using namespace geode::prelude;
+
+class $modify(SKPlayLayer, PlayLayer) {
+    bool init(GJGameLevel* level, bool useReplay, bool dontCreateObjects) {
+        stats::onLevelEnter();
+        visuals::onLevelEnter();
+        hacks::g_inInit = true;
+        bool ok = PlayLayer::init(level, useReplay, dontCreateObjects);
+        hacks::g_inInit = false;
+        return ok;
+    }
+
+    void resetLevel() {
+        PlayLayer::resetLevel();
+        stats::onReset(this);
+        hacks::onReset(this);
+        visuals::onReset(this);
+        bot::onReset(this, hacks::g_inInit);
+    }
+
+    void destroyPlayer(PlayerObject* player, GameObject* object) {
+        bool realHazard = object != m_anticheatSpike;
+        if (realHazard && player && hacks::noclipBlocks(this, player)) {
+            stats::onNoclipHit(this);
+            return;
+        }
+        bool prevTest = m_isTestMode;
+        if (hacks::safeActive()) m_isTestMode = true;  // the game doesn't save progress in test mode
+        PlayLayer::destroyPlayer(player, object);
+        m_isTestMode = prevTest;
+        if (realHazard && player && player->m_isDead) {
+            stats::onDeath(this);
+            hacks::onDeath(this);
+        }
+    }
+
+    void levelComplete() {
+        bool prevTest = m_isTestMode;
+        if (hacks::safeActive()) m_isTestMode = true;
+        PlayLayer::levelComplete();
+        m_isTestMode = prevTest;
+        stats::onComplete();
+        bot::onComplete();
+        render::onLevelComplete();
+    }
+
+    void onQuit() {
+        bot::onQuit();
+        render::onQuit();
+        saveConfigIfChanged();
+        PlayLayer::onQuit();
+    }
+
+    void delayedResetLevel() {
+        // With a custom respawn time, we decide when to respawn (see hacks::engineTick).
+        if (cfg().customRespawn && !hacks::g_ownRespawn) return;
+        PlayLayer::delayedResetLevel();
+    }
+
+    void pauseGame(bool unfocused) {
+        if (unfocused && cfg().noUnfocusPause) return;
+        PlayLayer::pauseGame(unfocused);
+    }
+
+    void showNewBest(bool newReward, int orbs, int diamonds, bool demonKey, bool noRetry, bool noTitle) {
+        if (cfg().noNewBest) return;
+        PlayLayer::showNewBest(newReward, orbs, diamonds, demonKey, noRetry, noTitle);
+    }
+
+    void updateProgressbar() {
+        PlayLayer::updateProgressbar();
+        visuals::percent(this);
+    }
+
+    void postUpdate(float dt) {
+        PlayLayer::postUpdate(dt);
+        visuals::postUpdate(this, dt);
+    }
+};
+
+class $modify(SKGameLayer, GJBaseGameLayer) {
+    void handleButton(bool down, int button, bool isPlayer1) {
+        if (!bot::injecting() && hacks::asPlay(this)) {
+            if (bot::blocksUser()) return;  // the macro is driving
+            stats::onClick(down);
+            bot::record(this, down, button, isPlayer1);
+        }
+        GJBaseGameLayer::handleButton(down, button, isPlayer1);
+    }
+
+    void processCommands(float dt, bool isHalfTick, bool isLastTick) {
+        bool inLevel = hacks::asPlay(this) != nullptr;
+        if (inLevel) {
+            hacks::beforeTick(this);
+            bot::beforeTick(this);
+        }
+        GJBaseGameLayer::processCommands(dt, isHalfTick, isLastTick);
+        if (inLevel) {
+            bot::afterTick(this);
+            stats::afterTick(this);
+        }
+    }
+
+    void update(float dt) {
+        // Frame stepper: the level is frozen until you press the step key.
+        if (cfg().frameStepper && !render::active() && hacks::asPlay(this)) {
+            if (!hacks::consumeStep()) return;
+            GJBaseGameLayer::update(1.f / 240.f);
+            return;
+        }
+        GJBaseGameLayer::update(dt);
+    }
+};
+
+class $modify(SKPlayer, PlayerObject) {
+    void playDeathEffect() {
+        if (cfg().noDeathEffect) return;
+        PlayerObject::playDeathEffect();
+    }
+
+    void playSpawnEffect() {
+        if (cfg().noSpawnEffect) return;
+        PlayerObject::playSpawnEffect();
+    }
+};

@@ -1,0 +1,11 @@
+{
+	"geode": "5.11.2",
+	"gd": {
+		"win": "2.2081"
+	},
+	"id": "sketchbook.sketchbook-menu",
+	"name": "Sketchbook Menu",
+	"version": "v1.0.0",
+	"developer": "Sketchbook",
+	"description": "A notebook-style mod menu: macro bot, replay bot, speedhack, video renderer, hitboxes, hit borders, themes and 40+ more features."
+}
